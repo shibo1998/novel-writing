@@ -1208,6 +1208,113 @@ class TemplateSafetyTests(TempDirTest):
         self.assertEqual(traces, [], "模板里的示例留痕行会被闸门当成真凭证：%s" % traces)
 
 
+class RuleResolutionTests(TempDirTest):
+    """书作者自己写的规则必须真的生效，不能因为只查插件目录而变成死路径。
+
+    两处共用 `book.resolve_rule`（kit 资产优先，缺失时回落到 `.soloent/rules/`）：
+      · `sync.py` 渲染 AGENTS.md 的路径
+      · `hooks/inject_canon.py` 的 SessionStart 规则正文注入
+    以前两处都只查 kit 资产，于是书自写的规则在 AGENTS.md 里是一条**不存在的路径**、
+    在注入里被当成「缺失文件」跳过 —— 规则写了却从来没生效（2026-09-20 实测）。
+    """
+
+    def init_book(self):
+        run_cli("init_book.py", "--dir", self.tmp, "--title", "规则定位测试书",
+                "--genre", "测试", "--platform", "测试", "--tags", "urban", "--json")
+
+    def _load(self):
+        sys.path.insert(0, SCRIPTS)
+        import kit as _kit
+        return _kit, _kit.load_book(["--root", self.tmp])
+
+    def test_book_authored_rule_is_preferred_when_kit_lacks_it(self):
+        """kit 里没有的规则 → 必须指向本书 `.soloent/rules/` 下的自写副本。"""
+        self.init_book()
+        local = os.path.join(self.tmp, ".soloent", "rules", "my-hard-rules.md")
+        with open(local, "w", encoding="utf-8") as f:
+            f.write("# 本书硬口径\n")
+
+        _kit, book = self._load()
+        hit = book.resolve_rule("my-hard-rules.md")
+
+        self.assertIsNotNone(hit, "书自写的规则定位不到")
+        self.assertEqual(hit[1], "book")
+        self.assertEqual(os.path.normcase(os.path.abspath(hit[0])),
+                         os.path.normcase(os.path.abspath(local)))
+
+    def test_kit_rule_wins_over_stale_book_copy(self):
+        """反向边界：共有规则以插件版本为准，某本书留着的旧副本不该被优先读到。"""
+        self.init_book()
+        _kit, book = self._load()
+        shared = "ai-anti-patterns.md"
+        kit_path = os.path.join(book.vault, "rules", shared)
+        if not os.path.isfile(kit_path):
+            self.skipTest("插件缺共享规则 %s" % shared)
+
+        hit = book.resolve_rule(shared)
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit[1], "kit", "共有规则应读插件版本，避免某本书读到过期副本")
+
+    def test_missing_rule_resolves_to_none(self):
+        """两边都没有 → None（调用方把它列进「未能注入」，不能猜一个路径出来）。"""
+        self.init_book()
+        _kit, book = self._load()
+        self.assertIsNone(book.resolve_rule("no-such-rule.md"))
+
+
+class RuleInjectionBudgetTests(TempDirTest):
+    """注入超预算时必须**报警**，绝不能静默丢规则。
+
+    踩到的坑（2026-09-20）：超预算分支只把「后面还没处理的」列进提示，
+    **当前这条自己被漏掉**——于是被挤掉的若是最后一条，就没有任何警告，
+    规则静默消失。而最后一条往往是题材文风规则（最该注入的那条）。
+    """
+
+    def _run(self, n_files, size_each, budget):
+        """造一个临时「vault/rules」并跑 collect_rules。"""
+        sys.path.insert(0, os.path.join(ROOT, "hooks"))
+        import importlib
+        ic = importlib.import_module("inject_canon")
+        vault = os.path.join(self.tmp, "vault")
+        rdir = os.path.join(vault, "rules")
+        os.makedirs(rdir, exist_ok=True)
+        load = []
+        for i in range(n_files):
+            name = "r%d.md" % i
+            load.append(name)
+            with open(os.path.join(rdir, name), "w", encoding="utf-8") as f:
+                f.write("规" * size_each)
+
+        class _B:
+            cfg = {"rules": {"load": load}}
+
+            def sec(self, _k):
+                return {"load": load}
+
+            def resolve_rule(self, rel):
+                # 方法体**会**捕获外层局部变量（类体不会，见下）
+                return (os.path.join(vault, "rules", str(rel).replace("/", os.sep)), "kit")
+
+        # ⚠️ 不能在类体里写 `vault = vault`：类作用域不捕获外层函数局部变量（NameError）。
+        #    类外赋值。
+        _B.vault = vault
+
+        return ic.collect_rules(_B(), max_bytes=budget)
+
+    def test_last_file_dropped_by_budget_is_reported(self):
+        """被挤掉的正好是最后一条时，也必须出现在警告里（不能静默消失）。"""
+        txt, names = self._run(n_files=3, size_each=2000, budget=3000)
+        self.assertTrue(len(names) < 3, "预算本应不够装下 3 条")
+        self.assertIn("未能注入", txt, "超预算却没有任何提示 = 规则静默消失")
+        self.assertIn("r2.md", txt, "被挤掉的最后一条必须点名")
+
+    def test_within_budget_reports_nothing(self):
+        """反向边界：装得下时不该报警告，且全部注入。"""
+        txt, names = self._run(n_files=3, size_each=100, budget=20000)
+        self.assertEqual(len(names), 3)
+        self.assertNotIn("未能注入", txt)
+
+
 class InstallAndLibraryScanTests(TempDirTest):
     """`install.py`（零用例）与 `doctor --lib`（仅 1 处引用）——两个覆盖面最大的入口。
 

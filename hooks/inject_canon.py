@@ -24,7 +24,10 @@ import kit  # noqa: E402
 
 MAX_CANON_BYTES = 24000   # 防止正典表膨胀到吃掉半个上下文
 MAX_DISCIPLINE = 16       # 纪律条目上限（默认 9 条 + 本书 extra_discipline 的余量）
-MAX_RULES_BYTES = 20000   # 规则文件正文的注入上限（本书 9 个文件合计约 19KB）
+MAX_RULES_BYTES = 26000   # 规则正文注入上限。
+# 实测：rules.load 满配 10 个文件合计约 21KB（本书还可能有自写规则），
+# 卡在 20KB 会把最后一条**题材文风规则**砍掉——那恰恰是最该注入的一条。
+# 真超了也要**报警**，不能静默截断（见 collect_rules）。
 MAX_SOLOENT_STATUS_BYTES = 4000   # SOLOENT.md §7/§8 的注入上限（doctor 也用这个数体检）
 
 
@@ -126,10 +129,13 @@ def collect_rules(book, max_bytes=MAX_RULES_BYTES):
                 "本次未注入任何规则——请检查 `vault` 配置与插件安装完整性。\n"), []
     out, kept, missing, used = [], [], [], 0
     for rel in load:
-        path = os.path.join(base, rel.replace("/", os.sep))
-        if not os.path.isfile(path):
+        # kit 资产优先，kit 里没有就用本书 `.soloent/rules/` 的自写副本
+        # （书作者自己写的规则以前会被当成缺失文件跳过 —— 规则写了却没生效）
+        hit = book.resolve_rule(rel)
+        if not hit:
             missing.append(rel)
             continue
+        path = hit[0]
         try:
             with open(path, encoding="utf-8-sig") as f:
                 text = f.read().strip()
@@ -148,7 +154,11 @@ def collect_rules(book, max_bytes=MAX_RULES_BYTES):
                 out.append(blob.encode("utf-8")[:left].decode("utf-8", "ignore")
                            + "\n\n…（已达注入上限，本文件其余内容请自行打开阅读）")
                 kept.append(rel)
-            rest = [x for x in load[load.index(rel) + 1:] if x not in kept]
+            # ⚠️ 原来只把「后面还没处理的」列进提示，**当前这条自己被漏掉**——
+            # 于是被挤掉的若是最后一条，就没有任何警告，规则静默消失。
+            # 这正是本 hook 文件头明令禁止的情形（2026-09-20 实测命中）。
+            rest = [rel] if rel not in kept else []
+            rest += [x for x in load[load.index(rel) + 1:] if x not in kept]
             if rest:
                 missing.append("未注入（超上限）：" + "、".join(rest))
             break

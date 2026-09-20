@@ -258,6 +258,14 @@ def build_config(opts):
                 "reason": "正文对话一律用中文双引号“ ”，严禁直角引号「」",
             },
             "rhythm": dict(RHYTHM_BOOTSTRAP),
+            # 可选机检项：默认 null = 跳过。显式写出来是为了**看得见这些开关**
+            # （配了才生效；类型由 kit.config_problems 校验）。说明见各自文档。
+            "panel": None,             # 面板/系统流：条目行数上限 + 行内禁结论词
+            "name_roster": None,       # canon／登记册／人物卡 三方互校
+            "hook_check": None,        # 细纲章末钩子 vs 正文结尾
+            "foreshadow_check": None,  # 伏笔回收总表标的埋设章是否真有线索词
+            "_comment_optional_checks": "以上 4 项 + rhythm 都是「配了才生效」；"
+                                        "机检项清单以 consistency_check.py --list-checks 为唯一来源。",
         },
         # 账本从最简形态起步（只查「有章必有账」与章号连续）。
         # 等力量体系定了再补 balance / income / rank_order 等（见 docs/03）。

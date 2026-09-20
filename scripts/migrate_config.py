@@ -9,13 +9,15 @@
 
 做法：
   1. 读 book.json（不是经 load_book，否则校验会先拒绝）；
-  2. 以 `assets/book.example.json` 为基线，**递归补齐缺失的键**（只增不改），
+  2. 以 `init_book` 生成的「新书配置」为基线，**递归补齐缺失的键**（只增不改），
+     （与 `doctor.py` 的「缺基线键」用同一份基线，避免两套口径）
      用户已有值与未知键一律保留；
   3. 置 `_schema` 为当前版本，跑结构校验——仍不通过则**不写任何东西**；
   4. 原文件先备份到 `.soloent/backups/<时间戳>-migrate/`，再原子写入。
 
 用法：
     python <kit>/scripts/migrate_config.py --root <书目录>
+    python <kit>/scripts/migrate_config.py --root <书目录> --check   # 干跑：只报告会补什么
 退出码：0=已升级或本就是当前版本  2=配置坏到补不齐（未写入）
 """
 import datetime
@@ -46,6 +48,7 @@ def deep_fill(target, baseline, prefix=""):
 
 
 def main():
+    dry_run = "--check" in sys.argv[1:]
     root = kit.find_book_root(explicit=kit.root_arg(sys.argv[1:]))
     if not root:
         print("⛔ 找不到书：请用 --root 指定书目录")
@@ -58,19 +61,31 @@ def main():
         print(f"⛔ 配置读不了：{p}\n   {e}\n   JSON 坏了没法自动修，请从 book.example.json 重建后再迁。")
         return 2
 
-    before = kit.config_problems(cfg)
-    if not before:
-        print(f"✅ {p} 已是当前版本（_schema={kit.SCHEMA}），无需迁移。")
-        return 0
-
     try:
         with open(EXAMPLE, encoding="utf-8-sig") as f:
             baseline = json.load(f)
     except (OSError, ValueError) as e:
         print(f"⛔ 读不了插件基线配置 {EXAMPLE}：{e}")
         return 2
+    # 基线以 init_book 生成的「新书长什么样」为准——doctor 的「缺基线键」用的也是它。
+    # 以前这里只跑一次 config_problems（骨架校验），骨架没坏的存量书一律「无需迁移」，
+    # 于是新加的键（gate.review_required、boundary、checks.* 新机检项）**永远补不进去**，
+    # 而 doctor 会一直报「缺 N 个基线键」——那条警告当时没有任何自动修法（2026-09-20 实测）。
+    try:
+        sys.path.insert(0, kit.KIT_ROOT)
+        import init_book as _ib
+        baseline = _ib.build_config({"dir": root, "title": "x", "genre": "x", "platform": "x",
+                                     "tags": "urban", "words": 2400, "length": "x"})
+    except Exception:
+        pass  # 起不来就退回示例配置
+
     added = deep_fill(cfg, baseline)
     cfg["_schema"] = kit.SCHEMA
+    before = kit.config_problems(cfg)
+    if not before and not added:
+        verb = "需要" if dry_run else "无需"
+        print(f"✅ {p} 已是当前版本（_schema={kit.SCHEMA}），{verb}迁移。")
+        return 0
 
     problems = kit.config_problems(cfg)
     if problems:
@@ -78,6 +93,12 @@ def main():
         for pr in problems:
             print("   - " + pr)
         return 2
+
+    if dry_run:
+        print(f"（--check 干跑，未写入）{p} 待迁移")
+        print(f"   将补齐 {len(added)} 个缺失键：" + "、".join(added[:12])
+              + (f" …等共 {len(added)} 个" if len(added) > 12 else ""))
+        return 0
 
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_dir = os.path.join(root, ".soloent", "backups", stamp + "-migrate")

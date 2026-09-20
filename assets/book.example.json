@@ -112,6 +112,10 @@
     "blacklist_per_chapter": 6,
     "review_required": true
   },
+  "boundary": {
+    "_comment": "opt_out_reason 非空 = 明确决定不做拆书（写明为什么）；留空时：预期声明了对标作品而 1-边界/ 又没有拆书成果 → brief 拦截。",
+    "opt_out_reason": ""
+  },
   "checks": {
     "_comment": "单章对账（consistency_check.py）的正典配置。每个区块留 null / 空数组即关闭该项。",
     "name_bad": {
@@ -414,9 +418,7 @@
         "到底",
         "横竖",
         "干脆",
-        "索性",
-        "倒",
-        "可"
+        "索性"
       ]
     },
     "panel": null,

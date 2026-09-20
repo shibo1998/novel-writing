@@ -227,6 +227,30 @@ class Book:
             return None
         return os.path.join(self.root, rel.replace("/", os.sep))
 
+    def resolve_rule(self, rel):
+        """定位 `rules.load` 里声明的一条规则文件，返回 (绝对路径, 来源) 或 None。
+
+        **顺序：kit 资产 → 本书 `.soloent/rules/`。**
+        为什么需要回落：书作者会自己在 `.soloent/rules/` 写规则（本书专属的硬口径、
+        闸门流程等）。以前只查 kit 资产，于是这类规则：
+          · AGENTS.md 里被渲染成 `{kit}/assets/rules/xxx.md` —— 一条**不存在的死路径**
+          · SessionStart 注入时被当成「缺失文件」跳过
+        两边都按「没配」处理，等于规则写了却从来没生效（2026-09-20 在某本书实测到）。
+
+        ⚠️ kit 资产优先：共有规则以插件版本为准（避免某本书留着旧副本读到过期内容）；
+        只有 kit 里**没有**时才用书里的自写副本。
+        """
+        rel = str(rel).replace("\\", "/")
+        vault = self.vault
+        if vault:
+            kit_path = os.path.join(vault, "rules", rel.replace("/", os.sep))
+            if os.path.isfile(kit_path):
+                return kit_path, "kit"
+        local = os.path.join(self.root, ".soloent", "rules", rel.replace("/", os.sep))
+        if os.path.isfile(local):
+            return local, "book"
+        return None
+
     @property
     def vault(self):
         """规则与技能的根目录。
@@ -614,12 +638,45 @@ def str_bytes(text):
 
 # 转折/关联词默认表（句长节奏的「转折词密度」用它）。**唯一来源**——
 # init_book 写新书默认值、consistency_check 算读数都用这一份，别各抄一遍。
+# ⚠️ 不收歧义单字：「可」绝大多数是「可以/可能/许可」，「倒」多为「倒下/摔倒」——
+# 实测某比对里「可」占了词表计数的 42%，把两边的转折词密度都灌成假的（2026-09-20）。
+# 宁可少收，也不要让一个高频非转折字主导这个指标。
 DEFAULT_TURN_WORDS = ["但是", "可是", "不过", "只是", "倒是", "偏偏", "反而", "却", "然而",
                       "其实", "毕竟", "反正", "何况", "再说", "不然", "要不", "哪怕", "就算",
-                      "虽说", "既然", "于是", "结果", "到底", "横竖", "干脆", "索性", "倒", "可"]
+                      "虽说", "既然", "于是", "结果", "到底", "横竖", "干脆", "索性"]
 
-BREAKDOWN_RE = re.compile(r"^\d+\.\d+_.*\.md$")
+# 实际命名习惯多带「样板书前缀」：`刷怪-1.1_开篇梗概.md`、`凡人-1.2_文风.md`。
+# 只认行首会把这些**真做过拆书**的书误判成「没拆」——2026-09-20 在真实书库里实测到，
+# 差点用错误的判据去拦两本已经拆过书的稿子。所以按「文件名里含 N.M_ 段」判。
+BREAKDOWN_MARK = re.compile(r"(?<![\d.])\d+\.\d+_")
 PLACEHOLDER_HINTS = ("✏️", "待填", "（未填", "(未填", "TODO", "同书名")
+
+
+def breakdown_artifacts(root):
+    """`1-边界/` 下的拆书成果。
+
+    认两种命名：`1.1_开篇拆解.md` 与 `刷怪-1.1_开篇梗概.md`（带样板书前缀）。
+    只扫一层子目录（`1-边界/某书/1.1_….md` 也算），不做深度递归。
+    """
+    base = os.path.join(root, "1-边界")
+    out = []
+    try:
+        entries = sorted(os.listdir(base))
+    except OSError:
+        return []
+    for fn in entries:
+        p = os.path.join(base, fn)
+        if os.path.isdir(p):
+            try:
+                for sub in sorted(os.listdir(p)):
+                    if sub.endswith(".md") and BREAKDOWN_MARK.search(sub):
+                        out.append(fn + "/" + sub)
+            except OSError:
+                continue
+            continue
+        if fn.endswith(".md") and BREAKDOWN_MARK.search(fn):
+            out.append(fn)
+    return out
 
 
 def declared_benchmarks(root, cfg=None):
@@ -643,19 +700,6 @@ def declared_benchmarks(root, cfg=None):
         if body and not any(h in body for h in PLACEHOLDER_HINTS):
             return body
     return ""
-
-
-def breakdown_artifacts(root):
-    """`1-边界/` 下的拆书成果（约定命名 `1.1_开篇拆解.md` 这种 `N.M_名称.md`）。"""
-    d = os.path.join(root, "1-边界")
-    out = []
-    try:
-        for fn in sorted(os.listdir(d)):
-            if BREAKDOWN_RE.match(fn):
-                out.append(fn)
-    except OSError:
-        return []
-    return out
 
 
 def boundary_issues(root, cfg=None):

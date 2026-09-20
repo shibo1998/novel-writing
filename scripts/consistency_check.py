@@ -91,8 +91,19 @@ def _bigrams(text, limit=60):
 
 
 def _canon_names(book):
-    """从 canon.md 的「人物」节表格里取第一列（唯一写法）作为登记名册。"""
+    """从 canon.md 的「人物」节表格里取登记名册。
+
+    ⚠️ **列位不是固定的**：常见两种写法——
+      · `| 林澈 | 林澈 | 林彻 | 定位 |`（名字在第 0 列）
+      · `| 主角 | 林小满 | — |`（第 0 列是身份标签，第 1 列才是名字）
+    认错列会把「主角／父亲／教官」当成角色名去比对人物卡，全盘假报。
+    所以列位可配：`checks.name_roster.name_column`（默认 0）。
+    """
     raw = book.read_path("canon") or ""
+    try:
+        col = int((book.sec("checks").get("name_roster") or {}).get("name_column", 0) or 0)
+    except (TypeError, ValueError):
+        col = 0
     names, in_sec = [], False
     for line in raw.splitlines():
         if re.match(r"^##\s+", line):
@@ -101,13 +112,15 @@ def _canon_names(book):
         if not in_sec or not line.strip().startswith("|"):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 2 or not "".join(cells).strip("-: "):
+        if len(cells) <= col or not "".join(cells).strip("-: "):
             continue
-        name = re.sub(r"[*`\[\]]", "", cells[0]).strip()
-        # 初始化模板里的占位行（`| ✏️主角 | | | |`）不是真登记，不能当成角色名去比对
-        if not name or "✏️" in name or name in ("角色", "姓名", "人物", "编号"):
-            continue
-        if name.startswith(("（", "(")):
+        name = re.sub(r"[*`\[\]]", "", cells[col]).strip()
+        # 去掉紧跟的括号注解：`许昂（高二3班，C 级）`→`许昂`、`顾清和（女性，A⁻ 级）`→`顾清和`
+        name = re.sub(r"\s*[（(].*$", "", name).strip()
+        # 表头/占位行：`| 项 | 正典值 | … |`、初始化模板的 `| ✏️主角 | | | |`
+        if not name or "✏️" in name or name in (
+                "角色", "姓名", "人物", "编号", "项", "正典值", "禁用/错误写法",
+                "说明", "定位", "备注", "常见错写", "唯一写法"):
             continue
         if 1 <= len(name) <= 6 and re.search(r"[\u4e00-\u9fff]", name):
             names.append(name)
@@ -645,7 +658,8 @@ def suggest_rhythm(book, argv):
     这个模式把校准变成一条命令，与机检**共用同一套口径**（都走 rhythm_stats）：
 
       · 按**样板书**校准（推荐）：`--suggest-rhythm --from 1-边界`
-        （把样板书原文放进该目录，md/txt 都读）
+        （把样板书原文放进该目录；目录里若同时有 .txt 与 .md，**只用 .txt**——
+         样板书原文通常导出成 txt，而 .md 是拆解报告，混进来会带偏统计）
       · 按**本书现状**定一个「先能用」的档：直接跑（读 chapters/）
         ⚠️ 按现状校准只会「罚最差的四分之一」，不会把标准提上去——想让文风真的变，
         得按样板书校准，或直接采用目标值（book.example.json 里的默认档）。
@@ -667,13 +681,18 @@ def suggest_rhythm(book, argv):
 
     if src:
         d = src if os.path.isabs(src) else os.path.join(book.root, src)
-        files = []
+        txt_files, md_files = [], []
         for dp, _dn, fns in os.walk(d):
             for fn in sorted(fns):
-                if fn.endswith((".md", ".txt")):
-                    p = os.path.join(dp, fn)
-                    files.append((os.path.relpath(p, book.root).replace(os.sep, "/"),
-                                  book.read(p) or ""))
+                p = os.path.join(dp, fn)
+                rel = os.path.relpath(p, book.root).replace(os.sep, "/")
+                if fn.endswith(".txt"):
+                    txt_files.append((rel, book.read(p) or ""))
+                elif fn.endswith(".md"):
+                    md_files.append((rel, book.read(p) or ""))
+        # 优先只读 .txt：样板书原文通常是导出的 txt，而目录里的 .md 是拆解报告与预期.md
+        # 这类**分析文字**，混进来会把句长/对话占比统计带偏（2026-09-20 实测）。
+        files = txt_files or md_files
         if not files:
             print(f"⚠ {d} 下没有 .md/.txt —— 把样板书原文放进去再跑")
             return 1
@@ -738,9 +757,12 @@ def suggest_rhythm(book, argv):
     print("按分位取的「罚最差四分之一」建议值（下限用 P25、上界用 P75；对话占比用 P90）：")
     print(json.dumps(sug, ensure_ascii=False, indent=2))
     print()
-    print(f"→ 按此值，本样本中 **{n_flag}/{len(rows)}** 篇会被拦（约四分之一，符合分位含义）。")
-    print("→ 想往上提标准，就用更严的值或直接采用 `assets/book.example.json` 的目标档；"
-          "按现状取分位只会固化现状。")
+    print(f"→ 按此值，本样本中 **{n_flag}/{len(rows)}** 篇会被拦。")
+    print("  ⚠️ 注意这不是「四分之一」：四个指标**各自**罚最差四分位，而只要有**任何一项**越线就算被拦，"
+          "并集自然大得多（4 项近似独立时约 68%）。想让总体只拦 ~25%，"
+          "把下限调到 P10 附近、上限调到 P90 附近。")
+    print("→ 按现状取分位只会固化现状；要提标准，请用 `--from <样板书目录>` 按对标实测取，"
+          "或直接采用 `assets/book.example.json` 的目标档，并按卷往上收。")
     print("→ 复跑：`--list-checks` 可核对该项是否已启用；填好后 doctor 不再提「启动档」。")
     return 0
 

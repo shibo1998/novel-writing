@@ -206,7 +206,15 @@ def render_agents(book, kit_dir):
     vault = book.vault
 
     def vpath(rel):
-        """规则文件 -> 绝对路径。统一反斜杠，避免同一份清单里混着 / 和 \\。"""
+        """规则文件 -> 绝对路径。
+
+        用 `book.resolve_rule`：kit 资产优先，**kit 里没有时才指向本书自写的副本**。
+        以前一律拼 `{kit}/assets/rules/{rel}`，于是书作者自己写的规则在 AGENTS.md 里
+        变成一条不存在的死路径（2026-09-20 实测）。统一反斜杠。
+        """
+        hit = book.resolve_rule(rel)
+        if hit:
+            return hit[0]
         p = str(rel).replace("/", "\\")
         return f"{vault}\\rules\\{p}" if vault else p
 

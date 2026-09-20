@@ -257,9 +257,16 @@ def check_five_pieces(rep, book, name):
 
 
 def _missing_keys(base, have, prefix=""):
-    """递归比对键集。缺「键」与键的值为空是两回事——前者意味着这段代码根本没被长出来。"""
+    """递归比对键集。缺「键」与键的值为空是两回事——前者意味着这段代码根本没被长出来。
+
+    ⚠️ 跳过 `_` 开头的键：那是**注释/元信息**（`_comment*`、`_readme`、`_schema`），不是功能键。
+    必须与 `migrate_config.deep_fill` 同一个口径——它也不补 `_` 键；
+    两边不一致时，doctor 会报一条**任何命令都修不掉**的「缺基线键」警告（2026-09-20 实测）。
+    """
     out = []
     for k, v in base.items():
+        if str(k).startswith("_"):
+            continue
         if k not in have:
             out.append(prefix + k)
         elif isinstance(v, dict) and isinstance(have.get(k), dict):

@@ -395,6 +395,56 @@ def main():
                             "%s -> %s（%d 处）"
                             % (os.path.relpath(p, ROOT), stale, len(hits)))
 
+    # ---------- F2. 两份基线必须一致（只比结构，不比内容） ----------
+    # `book.example.json`（文档/模板/A4 的渲染探针）与 `init_book.build_config`
+    # （新书实际拿到的、doctor 报「缺基线键」用的）是同一概念的两份拷贝。
+    # 它们漂开时：migrate 补的键和示例说的不是一回事，照着示例填会漏键。
+    # ⚠️ 只比**顶层段**与**骨架键清单**：示例里 name_bad/intel_bad 等是示范内容，
+    #    全量递归比对会把「示例有、新书没有」的内容键全报出来（纯噪音）。
+    SKELETON = [
+        "gate.review_required", "gate.blacklist_total", "gate.blacklist_per_chapter",
+        "checks.rhythm", "checks.panel", "checks.name_roster", "checks.hook_check",
+        "checks.foreshadow_check", "checks.blacklist", "checks.elevation",
+        "checks.quote_style", "checks.locked_details", "checks.gated_keywords",
+        "state.required", "state.derivable", "state.manual_stamp",
+        "chapter.file_regex", "chapter.title_regex", "chapter.default_words",
+        "chapter.word_max", "paths.chapters", "paths.canon", "paths.now", "paths.ledger",
+        "boundary.opt_out_reason", "rules.load", "rules.forbid",
+    ]
+    try:
+        import json as _j
+        import init_book as _ib
+        with open(os.path.join(ASSETS, "book.example.json"), encoding="utf-8") as f:
+            ex = _j.load(f)
+        ini = _ib.build_config({"dir": "x", "title": "x", "genre": "x", "platform": "x",
+                                "tags": "urban", "words": 2400, "length": "x"})
+
+        def has(d, dotted):
+            cur = d
+            for part in dotted.split("."):
+                if not isinstance(cur, dict) or part not in cur:
+                    return False
+                cur = cur[part]
+            return True
+
+        for label, skip in (("两份基线漂开（示例缺）", None), ("两份基线漂开（新书缺）", None)):
+            pass
+        miss_in_ex = [k for k in SKELETON if has(ini, k) and not has(ex, k)]
+        miss_in_ini = [k for k in SKELETON if has(ex, k) and not has(ini, k)]
+        sec_ex = {k for k in ex if not str(k).startswith("_")}
+        sec_ini = {k for k in ini if not str(k).startswith("_")}
+        miss_sec = (sec_ex ^ sec_ini)
+        if miss_in_ex:
+            add("F2", "两份配置基线漂开（示例缺这些键）",
+                "、".join(miss_in_ex[:6]) + ("…" if len(miss_in_ex) > 6 else ""))
+        if miss_in_ini:
+            add("F2", "两份配置基线漂开（新书缺这些键）",
+                "、".join(miss_in_ini[:6]) + ("…" if len(miss_in_ini) > 6 else ""))
+        if miss_sec:
+            add("F2", "两份配置基线漂开（顶层段不一致）", "、".join(sorted(miss_sec)))
+    except Exception as e:
+        add("F2", "基线一致性检查失败", repr(e)[:80])
+
     # ---------- F1. book.json 死字段 ----------
     # schema 里有、但没有任何脚本读它 —— 「配了没人用」。
     # 2026-09-19 实测抓到两个：`state.display_extra`、`ledger.rank_ranges`。
