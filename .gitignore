@@ -1,0 +1,14 @@
+# 运行时产物
+__pycache__/
+*.pyc
+
+# 工作区级 harness 配置（含本机绝对路径，由 sync.py / install.py 生成）
+.codebuddy/
+.zcode/
+
+# 另一个 agent 的工作数据（含 backups/）
+.workbuddy-ai/
+
+# 密钥（若有）
+.env
+.soloent/.api.env

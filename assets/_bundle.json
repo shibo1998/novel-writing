@@ -1,0 +1,19 @@
+{
+  "source": "D:\\1-work\\writing-vault",
+  "bundled_at": "2026-09-18 00:46",
+  "counts": {
+    "rules": 14,
+    "skills": 13,
+    "workflows": 7
+  },
+  "planned_counts": {
+    "rules": 14,
+    "skills": 123,
+    "workflows": 7
+  },
+  "counts_note": "counts = 实盘（audit 的 E3 会逐项核对）。planned_counts = 打包当天的计划条目数：skills 计划 123、实盘 13，说明之后裁剪过 110 个技能，而当时只改了文件没改记录——2026-09-20 给 audit 补账实核对时才暴露。已核对：被裁掉的技能没有任何一处被 SKILL.md／docs／AGENTS.template 引用（引用的 13 个技能与 7 个工作流都在），所以裁剪本身是安全的，坏的是记录。",
+  "skipped_skills": [
+    "golden-three-chapters-review"
+  ],
+  "note": "本目录由 scripts/bundle_vault.py 从 writing-vault 打包而来，请勿手改。要更新请改 writing-vault 后重跑打包脚本。"
+}

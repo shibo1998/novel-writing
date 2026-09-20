@@ -1,0 +1,556 @@
+{
+  "_schema": 1,
+  "_readme": [
+    "本书唯一配置文件。所有『随书变化』的值都在这里——插件 scripts/ 下的代码不含任何本书内容。",
+    "改这本书的正典/数值/账本结构 = 改这个文件，不要改插件代码。",
+    "初始化：把本文件复制为 <书>/.soloent/book.json 后逐项填写，再跑一次同步",
+    "        python <插件>/scripts/sync.py --root \"<书绝对路径>\"",
+    "        （旧版这两行写的是 python _agent/sync.py —— 那个目录早已不存在，2026-09-20 修正。）",
+    "        它会部署 Rule/Workflow、生成 AGENTS.md 与 tools/ 薄壳，**这些都不用你手写**。",
+    "凡是填了才生效的区块（ledger.income / ledger.projection / checks.rhythm / checks.panel / checks.name_roster / checks.hook_check / checks.foreshadow_check 等），留 null 即关闭该项检查。",
+    "机检项清单以 `python <kit>/tools/consistency_check.py --list-checks` 输出为唯一来源。"
+  ],
+  "book": {
+    "title": "示例书名",
+    "slug": "示例书名",
+    "genre": "都市高武 · 校园学院流",
+    "platform": "番茄男频",
+    "length_goal": "长篇 100 万字以上",
+    "model_note": "编辑器原用 OpenAI 兼容端点 `https://api.flashway.ai/v1`，模型 `gemini-3.8-flash-medium`，`temperature 0`。用其他模型亦可，但风格会漂移，需相应加强第 2、3 步的规则与技能复核。",
+    "extra_discipline": [
+      "**本书特有红线**：写在这里的条目会渲染进 AGENTS.md §4 末尾，逐条列出。"
+    ],
+    "env_notes": [
+      "本书特有的脚本、坑、注意事项。会渲染进 AGENTS.md §7.3 的环境坑清单（编号自动接在第 3 条之后）。"
+    ]
+  },
+  "_comment_vault": "规则与技能根目录。写 $PLUGIN/assets 而不是绝对路径——插件换机器后重跑 sync 会自动重渲染。",
+  "vault": "$PLUGIN/assets",
+  "paths": {
+    "chapters": "chapters",
+    "outline": "outline/第一卷-垫底-细纲.md",
+    "foreshadow": "outline/伏笔回收总表.md",
+    "canon": ".soloent/canon.md",
+    "ledger": ".soloent/ledger.tsv",
+    "now": ".soloent/memory/now.md",
+    "notes": "notes"
+  },
+  "chapter": {
+    "_comment": "file_regex 决定哪些文件算正文；不匹配的会被报成『未纳入检查』，不会静默漏掉。",
+    "file_regex": "^ch-(\\d+)\\.md$",
+    "title_regex": "^# 第\\d{3}章 \\S",
+    "title_number_regex": "^# 第0*(\\d+)章(?:\\s|$)",
+    "title_hint": "# 第0XX章 标题",
+    "word_max": 3000,
+    "default_words": 2400,
+    "words_range": "常态 2200–2600，区间 2000–3000",
+    "_comment_brief": "brief.py 会从 canon.md 抽取这几节作为写前速查。留空则整篇注入。",
+    "brief_canon_sections": [
+      "一",
+      "二",
+      "三",
+      "四",
+      "八"
+    ],
+    "outline_format": "auto",
+    "_comment_outline": "细纲写法：inline=一行一章 `31 标题：描述｜钩子·类型：内容` / heading=`## 第31章 标题` + `**核心概括**：` / auto=自动探测"
+  },
+  "rules": {
+    "_comment": "本书加载哪几条规则，写死在这里（不靠 agent 临场判断）。路径相对 vault/rules/。",
+    "system": [
+      "ai-anti-patterns.md",
+      "prose-directness.md"
+    ],
+    "load": [
+      "ai-anti-patterns.md",
+      "prose-directness.md",
+      "active-plugin-rules/anti-ai-base-constraints.md",
+      "active-plugin-rules/anti-ai-character-realism.md",
+      "active-plugin-rules/anti-ai-concise-writing.md",
+      "active-plugin-rules/rhythm-paragraph-length.md",
+      "active-plugin-rules/style-webnovel-base.md",
+      "active-plugin-rules/style-urban.md",
+      "active-plugin-rules/style-system.md"
+    ],
+    "_comment_load": "system 里那两条可以在这里重复写，渲染时会自动剔除，不会列两遍。",
+    "forbid": [
+      "active-plugin-rules/style-xianxia.md",
+      "active-plugin-rules/style-farming.md",
+      "active-plugin-rules/style-creative.md",
+      "_removed/style-historical.md"
+    ],
+    "forbid_reason": "题材冲突：仙侠要求禁现代口语、种田是慢节奏、脑洞是设定前置写法，均与本书冲突"
+  },
+  "state": {
+    "_comment": "now.md 顶部 SOLOENT-STATE 状态块的字段契约。",
+    "required": [
+      "chapter",
+      "rank",
+      "power",
+      "stats",
+      "assets",
+      "story_time",
+      "location",
+      "narrative_verified",
+      "updated"
+    ],
+    "derivable": [
+      "chapter"
+    ],
+    "manual_stamp": "narrative_verified",
+    "display": [
+      "rank",
+      "power"
+    ],
+    "display_extra": [
+      "stats"
+    ]
+  },
+  "gate": {
+    "_comment": "闸门阈值。blacklist_* 只警告不拦截（按 6 拦截会让多数章过不去）。review_required：出第 N 章时要求第 N-1 章的评审产物 notes/review-chapter-<N-1>-*.md 已存在。注：早期还有 batch_warn 键，但批量长跑判据写死在 preflight.py（新增 ≥2 章未逐章校验即拦截），该键从未被读取，2026-09-20 移除。",
+    "blacklist_total": 60,
+    "blacklist_per_chapter": 6,
+    "review_required": true
+  },
+  "checks": {
+    "_comment": "单章对账（consistency_check.py）的正典配置。每个区块留 null / 空数组即关闭该项。",
+    "name_bad": {
+      "_comment": "正确写法 -> [错误写法]。人名、专名、境界名的唯一写法。",
+      "林正秋": [
+        "林成栋",
+        "林长峰",
+        "林振秋"
+      ],
+      "混元桩": [
+        "混元功",
+        "混元桩功"
+      ]
+    },
+    "role_bad": [
+      [
+        "周崇是恶霸",
+        [
+          "周崇打",
+          "周崇一巴掌",
+          "周崇一脚",
+          "周崇怒斥"
+        ]
+      ],
+      [
+        "老秤是智者",
+        [
+          "老秤指点",
+          "老秤一语道破"
+        ]
+      ]
+    ],
+    "number_bad": [
+      [
+        "筑基成本写错（旧版×30口径已废）",
+        [
+          "筑基要一万",
+          "筑基一万点"
+        ]
+      ],
+      [
+        "每日收益写错",
+        [
+          "练气期每日一点",
+          "凡人每日十点"
+        ]
+      ]
+    ],
+    "intel_bad": {
+      "_comment": "情报禁令：写到规定章位前，正文不得『给答案』（埋线、暗示、让角色说错话都允许）。",
+      "天髓真相提前写死": [
+        "天髓是天地自生",
+        "天髓早就被用完"
+      ],
+      "周崇背后的人被点名": [
+        "周崇背后是长老",
+        "周崇背后的是"
+      ]
+    },
+    "gated_keywords": [
+      [
+        "hunyuan-l2",
+        "第二层",
+        "混元桩「第二层」悬空使用（ch-14 明确未解锁）",
+        [
+          9,
+          14
+        ],
+        null
+      ]
+    ],
+    "_comment_gated": "gated_keywords 每项 = [id, 关键词正则, 说明, 允许出现的章数组, 解锁章或null]。填了解锁章即自动放行。",
+    "unit_conflicts": {
+      "_comment": "数值单位与正典制式不符。只在『邻近口径词』时才判定，避免误报「晚上八点」。",
+      "patterns": [
+        [
+          "[一二三四五六七八九十百]+点",
+          "严重",
+          "「点」是自造振幅单位；正典为百分比制"
+        ],
+        [
+          "[一二三四五六七八九十]+成",
+          "中等",
+          "「成」为口语口径，须与 300%／500% 对齐"
+        ]
+      ],
+      "context": [
+        "振幅",
+        "发力"
+      ],
+      "window": 8
+    },
+    "timeline_bad": [
+      [
+        "八年前",
+        "严重",
+        "正典时间轴无「8 年前」事件：教桩＝11 年前（6 岁），殉职＝3 年前"
+      ]
+    ],
+    "age_context_bad": [
+      [
+        "(?<![一二三四五六七八九十百千万])十岁",
+        [
+          "父亲",
+          "林正秋",
+          "混元桩",
+          "桩",
+          "雪"
+        ],
+        "严重",
+        "教桩应为 6 岁（11 年前），非 10 岁"
+      ]
+    ],
+    "_comment_age": "age_context_bad 每项 = [年龄正则, 同行须出现的语境词, 严重度, 说明]。",
+    "scale": {
+      "_comment": "评级刻度：档位 -> [下限, 上限]。只校验距档位最近的数字。",
+      "F⁻": [
+        0,
+        19
+      ],
+      "F": [
+        20,
+        39
+      ],
+      "F⁺": [
+        40,
+        59
+      ],
+      "E⁻": [
+        60,
+        89
+      ],
+      "E": [
+        90,
+        124
+      ],
+      "E⁺": [
+        125,
+        169
+      ],
+      "D⁻": [
+        170,
+        224
+      ],
+      "D": [
+        225,
+        289
+      ],
+      "D⁺": [
+        290,
+        364
+      ]
+    },
+    "scale_near": {
+      "_comment": "成本表：境界词 -> 合法数值数组。出现在该词附近的不在表内即报警。与 ledger.rank_costs 交叉核对。",
+      "练气入门": [
+        10
+      ],
+      "练气中期": [
+        1000
+      ],
+      "筑基": [
+        400000
+      ]
+    },
+    "scale_exempt": [
+      [
+        "ch-11.md",
+        199,
+        "20 是 F 段门槛，E⁻ 是同句目的地，两者并列非冲突"
+      ]
+    ],
+    "_comment_exempt": "已人工核验、确认无误的刻度行：[文件, 行号, 理由]。不做静默忽略，理由留档。",
+    "locked_details": [
+      [
+        "教桩地点",
+        [
+          "教桩",
+          "画了个圈",
+          "马步架子",
+          "桩架"
+        ],
+        [
+          "沙地",
+          "院子里"
+        ],
+        "教桩场景地点统一为「后院天井」（深冬雪夜 · 青石板）"
+      ],
+      [
+        "公函发现地",
+        [
+          "公函"
+        ],
+        [
+          "木盒夹层"
+        ],
+        "公函的发现地是巡防制服领口衬垫（ch-10），不是木盒夹层"
+      ]
+    ],
+    "_comment_locked": "锁定细节：行内含任一语境词时，命中错误写法即判「严重」。新造专有细节当章登记到此。",
+    "blacklist": [
+      "一瞬间",
+      "刹那",
+      "这一刻",
+      "那一刻",
+      "仿佛",
+      "似乎",
+      "宛如",
+      "缓缓",
+      "微微",
+      "轻轻",
+      "静静",
+      "深吸一口气",
+      "眸子",
+      "凝固",
+      "顿时",
+      "瞬间",
+      "瞳孔骤缩",
+      "死一般的寂静",
+      "鸦雀无声",
+      "呆若木鸡",
+      "嘴角勾起",
+      "倒吸一口凉气",
+      "全场死寂"
+    ],
+    "elevation": {
+      "_comment": "章末禁令：只查最后 3 行，命中即「中等」疑似升华/说教。",
+      "words": [
+        "从今天起",
+        "这一刻，他不再",
+        "命运的齿轮",
+        "从此踏上",
+        "终将",
+        "必将",
+        "意义非凡",
+        "注定"
+      ],
+      "tail_lines": 3
+    },
+    "rare_chars": {
+      "_comment": "生僻字：字 -> 建议写法。判断标准是「普通读者认不认识」，不是语料频率。",
+      "贽": "拜师的礼"
+    },
+    "rare_soft": [
+      "埂",
+      "畦",
+      "锹",
+      "褐",
+      "褂",
+      "摞",
+      "褶",
+      "淤"
+    ],
+    "quote_style": {
+      "_comment": "标点规范：正文对话必须用中文双引号。forbid 列出禁止出现的字符。",
+      "forbid": [
+        "「",
+        "」"
+      ],
+      "reason": "正文对话一律用中文双引号“ ”，严禁直角引号「」"
+    },
+    "rhythm": {
+      "_comment": "句长节奏分轨。阈值必须来自样板书实测，不能凭空拍——初版拍 30% 会把正常的对话章判红。",
+      "enabled": true,
+      "narr_avg_min": 22,
+      "narr_long_min_pct": 25,
+      "dialogue_max_pct": 55,
+      "short_ge10_max_pct": 25,
+      "turn_min_per_1000": 7.0,
+      "min_chars": 300,
+      "min_sentences": 20,
+      "tag_names": [
+        "林小满",
+        "赵成",
+        "吴斌"
+      ],
+      "turn_words": [
+        "但是",
+        "可是",
+        "不过",
+        "只是",
+        "倒是",
+        "偏偏",
+        "反而",
+        "却",
+        "然而",
+        "其实",
+        "毕竟",
+        "反正",
+        "何况",
+        "再说",
+        "不然",
+        "要不",
+        "哪怕",
+        "就算",
+        "虽说",
+        "既然",
+        "于是",
+        "结果",
+        "到底",
+        "横竖",
+        "干脆",
+        "索性",
+        "倒",
+        "可"
+      ]
+    },
+    "panel": null,
+    "name_roster": null,
+    "hook_check": null,
+    "foreshadow_check": null,
+    "_comment_optional_checks": "可选机检（默认 null = 跳过）：panel＝面板/系统流条目行数上限与禁结论词；name_roster＝canon/登记册/人物卡三方互校；hook_check＝细纲章末钩子与正文结尾词面核对；foreshadow_check＝伏笔回收总表标的埋设章是否真有线索词。config_problems 只校验骨架键，这几项随写作长出。"
+  },
+  "ledger": {
+    "_comment": [
+      "章节账本（.soloent/ledger.tsv）。它补的是 consistency_check（只看单章写法）与",
+      "state_sync（只数章数）都看不见的一层——章与章之间的账。",
+      "columns 必须与 ledger.tsv 的表头顺序一致；每个语义角色通过 *_column 指向列名。"
+    ],
+    "columns": [
+      "ch",
+      "day",
+      "rank",
+      "power",
+      "pot",
+      "stone",
+      "cash",
+      "note"
+    ],
+    "int_columns": [
+      "ch",
+      "day",
+      "pot",
+      "stone"
+    ],
+    "chapter_column": "ch",
+    "note_column": "note",
+    "min_columns": 7,
+    "balance": {
+      "_comment": "平账等式：prev_end + in - out == end。留 null 关闭。",
+      "in": null,
+      "out": null,
+      "end": "pot",
+      "prev_end": "pot"
+    },
+    "rank_column": "rank",
+    "rank_order": [
+      "F⁻",
+      "F",
+      "F⁺",
+      "E⁻",
+      "E",
+      "E⁺",
+      "D⁻",
+      "D",
+      "D⁺",
+      "C⁻",
+      "C",
+      "C⁺"
+    ],
+    "rank_ranges": {
+      "F⁻": [
+        0,
+        19
+      ],
+      "F": [
+        20,
+        39
+      ],
+      "F⁺": [
+        40,
+        59
+      ],
+      "E⁻": [
+        60,
+        89
+      ],
+      "E": [
+        90,
+        124
+      ],
+      "E⁺": [
+        125,
+        169
+      ],
+      "D⁻": [
+        170,
+        224
+      ],
+      "D": [
+        225,
+        289
+      ],
+      "D⁺": [
+        290,
+        364
+      ],
+      "C⁻": [
+        365,
+        449
+      ],
+      "C": [
+        450,
+        544
+      ],
+      "C⁺": [
+        545,
+        649
+      ]
+    },
+    "rank_costs": null,
+    "_comment_costs": "升境成本：[[阶段名, 成本, 该阶段之前的境界], ...]。留 null 关闭该项。",
+    "rank_max_jump": 1,
+    "_comment_jump": "单章最多允许跨几档。null = 不检查（有的体系允许大幅跳档）。",
+    "range_check": null,
+    "_comment_range": "数值×评级自洽：{value_column, range_by_column, ranges}。如战力必须落在其评级区间内。",
+    "anchors": null,
+    "anchor_column": null,
+    "_comment_anchors": "突破锚点：{\"章号\": 该列必须等于的正典值}。如 {\"10\": 58.5, \"11\": 61.8}。留 null 关闭。",
+    "jump_check": null,
+    "_comment_jumprun": "余额突变告警：{columns: [...], threshold: 40}。跟「上一个有效值」比，不是相邻行。",
+    "income": {
+      "_comment": "收入上限：收入 <= 期数 × 速率。period_column 为空时不做上限检查。",
+      "cap_column": null,
+      "rate_by_column": null,
+      "rate_table": null,
+      "period_column": null,
+      "exempt_note_words": [
+        "灵果",
+        "灵肉",
+        "馈赠",
+        "礼包"
+      ]
+    },
+    "day_column": "day",
+    "day_type": "text",
+    "_comment_day": "day_type: text=自由文本（只查非空）/ int=整数故事日（查单调与时间空档）/ month_day=「9/2」「10/中」式（查单调）",
+    "projection": null,
+    "_comment_projection": "破境日投影：{goal_words, day_regex}。留 null 关闭。",
+    "_comment_projection_day": "day_regex 要带一个捕获组，捕获中文或阿拉伯数字的天数，如 \"第([一二三四五六七八九十百]+)天\""
+  }
+}

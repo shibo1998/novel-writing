@@ -1,0 +1,51 @@
+{
+  "_readme": [
+    "agent 钩子注册模板。**先确认你要配的是哪一套 schema**——两套不通用：",
+    "  · CodeBuddy / WorkBuddy 系 → <工作区根>/.codebuddy/settings.json",
+    "    schema：{\"hooks\":{\"<Event>\":[{\"matcher\":…,\"hooks\":[{\"type\":\"command\",\"command\":\"<单条 shell 字符串>\",\"timeout\":秒}]}]}}",
+    "    ⚠️ 只配 .zcode 时，钩子在 CodeBuddy/WorkBuddy 下**永不触发**（2026-09-19 实测确认）。",
+    "    本书的这份由 `sync.py` 自动生成（见 scripts/sync.py 的 hook_config_codebuddy），不必手写。",
+    "  · ZCode / Claude Code 系 → <工作区根>/.zcode/config.json 或 .claude/settings.json",
+    "    schema 即下面这段（type:\"process\" + command/args 分开）",
+    "  · 协议是通用的：stdin 收 JSON，stdout 吐 {\"hookSpecificOutput\":{...}}",
+    "把 <PLUGIN> 换成 novel-writing 插件的绝对路径（Windows 路径用双反斜杠）。",
+    "",
+    "钩子是可选但强烈建议的一层：md 方案的死穴是「AI 愿不愿意读」，",
+    "钩子绕过了这个不确定性——正典与纪律由程序注入，不依赖 AI 主动读取。",
+    "（本文件是 2026-09-20 补的 .codebuddy 说明：此前只讲 .zcode/.claude，"
+    "照它给本 harness 配钩子会配到不生效的那一份。）"
+  ],
+  "hooks": {
+    "enabled": true,
+    "timeoutMs": 30000,
+    "events": {
+      "SessionStart": [
+        {
+          "hooks": [
+            {
+              "type": "process",
+              "command": "python",
+              "args": ["<PLUGIN>\\hooks\\inject_canon.py"],
+              "timeoutMs": 15000,
+              "statusMessage": "注入本书正典与写作纪律…"
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "Write|Edit",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "python",
+              "args": ["<PLUGIN>\\hooks\\after_chapter_write.py"],
+              "timeoutMs": 30000,
+              "statusMessage": "章节对账…"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

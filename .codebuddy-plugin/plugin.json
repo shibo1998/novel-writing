@@ -1,0 +1,20 @@
+{
+  "name": "novel-writing",
+  "version": "1.0.0",
+  "description": "中文长篇网文创作全流程：对话式建书、世界观与设定、大纲与细纲、逐章写作与防漂移校验。自带规则库、技能库与六个校验工具。",
+  "author": {
+    "name": "仕博"
+  },
+  "category": "skill",
+  "keywords": [
+    "novel",
+    "webnovel",
+    "writing",
+    "网文",
+    "小说",
+    "长篇",
+    "创作流程",
+    "一致性校验"
+  ],
+  "license": "随附规则与技能文本源自用户自有资产（writing-vault）"
+}

@@ -1,0 +1,30 @@
+{
+  "description": "novel-writing 插件的钩子：会话启动时注入本书正典与写作纪律；章节文件落盘后自动跑对账＋出章闸门，并把结果注入上下文。",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/inject_canon.py\"",
+            "description": "注入本书的 canon.md 与写作纪律",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${CODEBUDDY_PLUGIN_ROOT}/hooks/after_chapter_write.py\"",
+            "description": "章节落盘后自动对账＋过闸",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
