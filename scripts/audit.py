@@ -402,7 +402,7 @@ def main():
     # ⚠️ 只比**顶层段**与**骨架键清单**：示例里 name_bad/intel_bad 等是示范内容，
     #    全量递归比对会把「示例有、新书没有」的内容键全报出来（纯噪音）。
     SKELETON = [
-        "gate.review_required", "gate.blacklist_total", "gate.blacklist_per_chapter",
+        "gate.review_required", "gate.draft_free", "gate.blacklist_total", "gate.blacklist_per_chapter",
         "checks.rhythm", "checks.panel", "checks.name_roster", "checks.hook_check",
         "checks.foreshadow_check", "checks.blacklist", "checks.elevation",
         "checks.quote_style", "checks.locked_details", "checks.gated_keywords",

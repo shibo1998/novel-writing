@@ -218,6 +218,9 @@ def build_config(opts):
             # 实测某书 69 章的 review 产物数是 0。开着它：出第 N+1 章时，
             # 闸门会要求第 N 章的评审记录已存在（notes/review-chapter-N-*.md）。
             "review_required": True,
+            # 起草自由（2026-09-21）：True 时风格类机检降为「提示」、brief 不再列禁令——
+            # 负向禁令撤出起草上下文，完稿只拦硬口径。依据 docs/17 与 9-14 日志。
+            "draft_free": False,
         },
         # 写作边界：预期里声明了对标作品却没拆书 → brief 会拦（见 kit.boundary_issues）。
         # 真没样板书时，在这里写明原因即可放行——**要的是拍板留档，不是硬卡**。

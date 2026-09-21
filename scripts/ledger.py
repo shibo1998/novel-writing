@@ -197,19 +197,49 @@ def check(book, rows, errs):
     except re.error as e:
         block.append(f"chapter.title_number_regex 无效：{e}")
         title_number_re = None
+    # 中文数字章号兜底（2026-09-21）：仙侠类书的标题是「第一章　药圃」（中文数字+全角空格），
+    # 默认正则只认阿拉伯数字——这类书的 preflight 从装机起就没通过过（实测发现）。
+    # 书级 title_number_regex 仍优先；这里只做**识别不出时的兜底**，不改变书级配置语义。
+    _CN_DIGITS = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+                  "六": 6, "七": 7, "八": 8, "九": 9}
+
+    def _cn_to_int(s):
+        """中文数字 → int（支持 一~九百九十九；转换不了返回 None）。"""
+        if s.isdigit():
+            return int(s)
+        total, num = 0, 0
+        for chn in s:
+            if chn in _CN_DIGITS:
+                num = _CN_DIGITS[chn]
+            elif chn == "十":
+                total += (num or 1) * 10
+                num = 0
+            elif chn == "百":
+                total += (num or 1) * 100
+                num = 0
+            else:
+                return None
+        return total + num if (total or num) else None
+
+    _cn_title_re = re.compile(r"^\s*#\s*第\s*([0-9一二三四五六七八九十百零两]+)\s*章")
+
     if title_number_re is not None:
         for file_ch, fn, text in book.chapter_files():
             first_line = text.splitlines()[0] if text.splitlines() else ""
             hit = title_number_re.search(first_line)
-            if not hit:
+            title_ch = None
+            if hit:
+                try:
+                    title_ch = int(hit.group(1))
+                except (IndexError, TypeError, ValueError):
+                    title_ch = None
+            if title_ch is None:
+                cn_hit = _cn_title_re.search(first_line)
+                if cn_hit:
+                    title_ch = _cn_to_int(cn_hit.group(1))
+            if title_ch is None:
                 block.append(f"无法从标题识别章号：{fn}")
                 continue
-            try:
-                title_ch = int(hit.group(1))
-            except (IndexError, TypeError, ValueError):
-                block.append("chapter.title_number_regex 必须用第 1 个捕获组提取章号")
-                title_number_re = None
-                break
             if title_ch != file_ch:
                 block.append(f"{fn} 文件名章号 {file_ch} 与标题章号 {title_ch} 不一致")
 

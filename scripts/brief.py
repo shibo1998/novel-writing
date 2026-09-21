@@ -165,8 +165,13 @@ def boundary_blockers(book):
 
 # ---------------------------------------------------------------- 文风红线
 
-def style_redlines(book):
+def style_redlines(book, full=False):
     """本章文风红线（去 AI 味）。逐条取自机检配置，与闸门同源。
+
+    gate.draft_free=true 且未强制 full 时：返回「起草自由」瘦身版——
+    不列任何风格禁令（黑名单/句式/节奏/面板），只保留硬口径（locked_details）
+    与模式说明。负向禁令撤出起草上下文，是 2026-09-21 作者拍板的「起草自由、
+    验收守底」管线；完稿后对账仍以「提示」报告全部风格项。
 
     为什么放在接地单里而不是让 agent 自己去读规则文件：规则躺在那儿不会自己进上下文。
     这一节把「本章会被机检查什么」提前说清楚——起草时就知道边界在哪，
@@ -174,6 +179,17 @@ def style_redlines(book):
     """
     C = book.sec("checks")
     out = []
+
+    if not full and bool((book.sec("gate") or {}).get("draft_free")):
+        out.append("起草自由模式（gate.draft_free）：动笔时**不看任何风格禁令**——"
+                   "以角色的真实反应和语言的自然流动为主导；风格类项目完稿后由对账"
+                   "以「提示」报告，不拦闸门。完稿自查按 story-style「节奏软目标」表算"
+                   "（过闸线≠目标）。")
+        for x in (C.get("locked_details") or []):
+            hint = str(x[3])[:46]
+            out.append(f"硬口径[{x[0]}]（违者拦，非风格项）：{hint}")
+        out.append("保留豁免同旧版：留痕行尾「；保留：<理由>」，/review 逐条复核。")
+        return out
 
     words = [str(w) for w in (C.get("blacklist") or []) if not str(w).startswith("_")]
     if words:

@@ -57,6 +57,21 @@ AI_STRUCT_PATTERNS = [
 _AI_STRUCT_IDS = frozenset(sid for sid, _, _ in AI_STRUCT_PATTERNS)
 
 
+# 起草自由模式（gate.draft_free）下可降级为「提示」的风格类发现。
+# ⚠️ 与上方 is_style_finding（留痕对撞口径）不同：这里额外含「句长节奏/转折词密度」，
+# 且句式 tag 用 AI_STRUCT_IDS 判定——锁定细节（[测试锁定] 等）不是风格类，任何模式都拦。
+_DRAFT_FREE_STYLE_PREFIXES = ("句长节奏", "转折词密度", "面板条目", "面板文体", "面板结论文案",
+                              "AI句式/黑名单词", "比喻词堆砌", "章末升华", "同段连发")
+
+
+def is_draft_free_style_finding(rule):
+    r = str(rule)
+    m = re.match(r"\[([^\]]+)\]", r)
+    if m:
+        return m.group(1).strip() in _AI_STRUCT_IDS
+    return r.startswith(_DRAFT_FREE_STYLE_PREFIXES)
+
+
 def is_style_finding(rule):
     """该条机检发现是否属于「去 AI 味」类别（供 preflight 留痕对撞用）。
 
@@ -815,6 +830,15 @@ def main():
                              f"chapters/ 下有 {len(stray)} 个 .md 未被纳入检查（命名不符）："
                              + ", ".join(stray[:6])))
 
+    # 起草自由模式（gate.draft_free）：风格类发现降为「提示」——只报告，不计入拦截。
+    # 依据 2026-09-14/15 作者与 Gemini 的结论 + 三次实测（详见 docs/17 与 9-14 日志）：
+    # 负向禁令不该在验收时惩罚「自由起草」的正文；硬口径类（锁定细节/口径冲突/账本）不受影响。
+    if bool((book.sec("gate") or {}).get("draft_free")):
+        style = [f for f in findings if is_draft_free_style_finding(f[3])]
+        if style:
+            findings = [f for f in findings if not is_draft_free_style_finding(f[3])]
+            findings += [("提示", f[1], f[2], f[3], f[4]) for f in style]
+
     findings = kit.sort_findings(findings)
     c = kit.count_sev(findings)
     # 报告 + 趋势一次持锁：并发入口（钩子/watcher/手工）同时写同一份当日报告与
@@ -824,8 +848,9 @@ def main():
         print(report)
         print(f"\n[已写出] {dst}")
         kit.append_trend(book, findings)
-    # 摘要行是 preflight 的解析锚点，格式不得改动
-    print(f"严重 {c['严重']} · 中等 {c['中等']} · 轻微 {c['轻微']}")
+    # 摘要行是 preflight 的解析锚点，前三个数字的格式不得改动（提示数追加在末尾，锚点正则不受影响）
+    extra = f" ｜ 提示 {c['提示']}" if c.get("提示") else ""
+    print(f"严重 {c['严重']} · 中等 {c['中等']} · 轻微 {c['轻微']}{extra}")
     return 0
 
 

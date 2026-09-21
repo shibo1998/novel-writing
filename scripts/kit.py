@@ -563,7 +563,11 @@ def to_num(v):
     return int(f) if f.is_integer() else f
 
 
-SEV_ORDER = {"严重": 0, "中等": 1, "轻微": 2}
+SEV_ORDER = {"严重": 0, "中等": 1, "轻微": 2, "提示": 9}
+
+# 「风格类」发现的判定在 consistency_check.is_style_finding（它拥有句式禁项名单
+# AI_STRUCT_PATTERNS；锁定细节的 rule 同样以「[名]」开头，分类器必须能区分两者——
+# 2026-09-21 实测：放 kit 里靠 [前缀 判断会把硬口径误降级）。
 
 
 # ---------------------------------------------------------------- 写作前置体检
@@ -754,10 +758,11 @@ def write_report(book, findings, title, tag=""):
     import datetime
     today = datetime.date.today().isoformat()
     c = count_sev(findings)
+    tail = f" ｜ 提示 {c['提示']}（起草自由 · 不计入拦截）" if c.get("提示") else ""
     lines = [f"# {title}（{today}）\n",
              f"扫描章节：{len(book.chapter_files())} 章 ｜ "
-             f"严重 {c['严重']} · 中等 {c['中等']} · 轻微 {c['轻微']}\n"]
-    for sev in ("严重", "中等", "轻微"):
+             f"严重 {c['严重']} · 中等 {c['中等']} · 轻微 {c['轻微']}{tail}\n"]
+    for sev in ("严重", "中等", "轻微", "提示"):
         rows = [f for f in findings if f[0] == sev]
         if not rows:
             continue

@@ -100,17 +100,55 @@ def main():
     name = sanitize_name(arg("--name") or "未命名草稿")
     as_json = "--json" in argv
 
+    # --samples N：一次建 N 份草稿做 A/B 对比（作者 2026-09-14 提出的方法）。
+    # 奇数样本=自由口径（只带声音与故事必要项），偶数样本=红线口径（附完整风格禁令）。
+    samples_arg = arg("--samples")
+    try:
+        n_samples = max(1, min(6, int(samples_arg))) if samples_arg and samples_arg.isdigit() else 1
+    except ValueError:
+        n_samples = 1
+
+    # 红线口径需要完整禁令清单（不受 gate.draft_free 影响——对照组就该带对照组的条件）
+    import brief as _brief
+    gated_lines = _brief.style_redlines(book, full=True)
+    gated_note = "\n".join("- " + x for x in gated_lines) or "-（本书未配置风格机检项）"
+    free_note = ("- 动笔时**不看任何风格禁令**：以角色的真实反应和语言的自然流动为主导；\n"
+                 "- 声音与故事必要项（正典、账本、钩子、硬口径）照常遵守；\n"
+                 "- 完稿后由对账以「提示」报告风格项，不拦闸门。")
+    profiles = []
+    for k in range(1, n_samples + 1):
+        if k % 2 == 1:
+            profiles.append((f"样本{k} · 自由口径", free_note))
+        else:
+            profiles.append((f"样本{k} · 红线口径（对照）", gated_note))
+
     drafts_dir = os.path.join(book.root, DRAFTS_DIR)
     os.makedirs(drafts_dir, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = unique_path(drafts_dir, f"{name}-{stamp}")
-    rel = os.path.relpath(path, book.root).replace(os.sep, "/")
-    kit.atomic_write_text(path, TEMPLATE.format(name=name, date=datetime.date.today().isoformat()))
+    created = []
+    for label, note in profiles:
+        stem = f"{name}-{label.split(' · ')[0]}-{stamp}" if n_samples > 1 else f"{name}-{stamp}"
+        path = unique_path(drafts_dir, stem)
+        rel = os.path.relpath(path, book.root).replace(os.sep, "/")
+        body = TEMPLATE.format(name=f"{name}（{label}）", date=datetime.date.today().isoformat())
+        body += f"\n## 本样本的写作口径\n\n**{label}**\n\n{note}\n"
+        kit.atomic_write_text(path, body)
+        created.append(rel)
 
     if as_json:
-        print(json.dumps({"ok": True, "draft": rel, "non_canonical": True}, ensure_ascii=False))
+        # 向后兼容：单样本时保留旧键 "draft"，多样本另给 "drafts" 列表
+        payload = {"ok": True, "drafts": created, "non_canonical": True,
+                   "samples": n_samples}
+        if created:
+            payload["draft"] = created[0]
+        print(json.dumps(payload, ensure_ascii=False))
         return 0
-    print(f"✅ 已创建探索草稿：{rel}")
+    if n_samples == 1:
+        print(f"✅ 已创建探索草稿：{created[0]}")
+    else:
+        print(f"✅ 已创建 {n_samples} 份对比草稿（自由口径=奇数，红线口径=偶数）：")
+        for rel in created:
+            print(f"   {rel}")
     print("   非正典：不进 chapters/、不推进 now.md、不写账本、不产生章号。")
     print("   转正前必须补齐正典 + 细纲 + 账本行，并经作者确认（清单见草稿文件头）。")
     return 0

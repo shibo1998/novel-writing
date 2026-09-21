@@ -310,6 +310,12 @@ def flow_trace(book, cur):
         )
     tail = hits[cur]
     if re.search(r"未执行|跳过|历史章|未跑", tail):
+        if bool((book.sec("gate") or {}).get("draft_free")):
+            return "warn", (
+                f"第 {cur} 章留痕标注为未执行／跳过（{tail}）。"
+                f"起草自由模式：历史章的流程记账只报告不拦——"
+                f"自下一章（第 {cur + 1} 章）起必须逐条执行并真实留痕。"
+            )
         return "stale", (f"第 {cur} 章留痕标注为未执行／跳过（{tail}）"
                          f"——正式章节必须逐条执行。")
     if not FLOW_DETAIL_RE.fullmatch(tail):
@@ -327,6 +333,12 @@ def flow_trace(book, cur):
             return "warn", (
                 f"第 {cur} 章声明保留 {len(residual)} 处机检可见的去 AI 味残留"
                 f"（{sample}{more}）——过闸放行，但 /review 时必须逐条复核保留理由。"
+            )
+        if bool((book.sec("gate") or {}).get("draft_free")):
+            return "warn", (
+                f"第 {cur} 章机检仍有 {len(residual)} 处风格残留（{sample}{more}）。"
+                f"起草自由模式（gate.draft_free）：风格残留只报告不拦——"
+                f"/review 时必须逐条过目；硬口径类残留（锁定细节/口径冲突）仍拦。"
             )
         return "invalid", (
             f"第 {cur} 章留痕宣称自查已完成，但机检仍可见 {len(residual)} 处去 AI 味残留"

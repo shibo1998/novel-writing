@@ -110,7 +110,8 @@
     "_comment": "闸门阈值。blacklist_* 只警告不拦截（按 6 拦截会让多数章过不去）。review_required：出第 N 章时要求第 N-1 章的评审产物 notes/review-chapter-<N-1>-*.md 已存在。注：早期还有 batch_warn 键，但批量长跑判据写死在 preflight.py（新增 ≥2 章未逐章校验即拦截），该键从未被读取，2026-09-20 移除。",
     "blacklist_total": 60,
     "blacklist_per_chapter": 6,
-    "review_required": true
+    "review_required": true,
+    "draft_free": false
   },
   "boundary": {
     "_comment": "opt_out_reason 非空 = 明确决定不做拆书（写明为什么）；留空时：预期声明了对标作品而 1-边界/ 又没有拆书成果 → brief 拦截。",

@@ -1208,6 +1208,97 @@ class TemplateSafetyTests(TempDirTest):
         self.assertEqual(traces, [], "模板里的示例留痕行会被闸门当成真凭证：%s" % traces)
 
 
+class CnNumeralTitleTests(TempDirTest):
+    """中文数字章标题（「第一章　药圃」）必须能识别章号——仙侠类书从装机起
+    preflight 就没通过过的根因（默认 title_number_regex 只认阿拉伯数字）。
+    兜底转换属于 kit 全局，不要求书级配置改正则。"""
+
+    def test_cn_numeral_title_is_recognized(self):
+        run_cli("init_book.py", "--dir", self.tmp, "--title", "中文数字测试书",
+                "--genre", "测试", "--platform", "测试", "--tags", "urban", "--json")
+        with open(os.path.join(self.tmp, "chapters", "ch-1.md"), "w", encoding="utf-8") as f:
+            f.write("# 第一章　测试\n\n正文。\n")
+        with open(os.path.join(self.tmp, "chapters", "ch-2.md"), "w", encoding="utf-8") as f:
+            f.write("# 第十二章　测试\n\n正文。\n")
+
+        result = run_cli("ledger.py", "--root", self.tmp)
+        output = result.stdout + result.stderr
+        self.assertNotIn("无法从标题识别章号", output, output[:400])
+        self.assertIn("文件名章号 2 与标题章号 12 不一致", output,
+                      "中文数字「十二」应转换为 12（顺便钉住转换正确性）")
+
+
+class DraftFreeTests(TempDirTest):
+    """起草自由（gate.draft_free）：风格发现降为「提示」、brief 撤禁令、多样本草稿。
+
+    依据：2026-09-14/15 作者与 Gemini 的结论 + 三次实测——负向禁令不该在验收时
+    惩罚「自由起草」的正文（docs/17、9-14 日志）。反向边界：关掉开关 = 旧行为；
+    硬口径（锁定细节/口径冲突/账本）任何模式下都拦。
+    """
+
+    def init_book(self):
+        run_cli("init_book.py", "--dir", self.tmp, "--title", "起草自由测试书",
+                "--genre", "测试", "--platform", "测试", "--tags", "urban", "--json")
+
+    def set_flag(self, value):
+        import json as _json
+        p = os.path.join(self.tmp, ".soloent", "book.json")
+        d = _json.load(open(p, encoding="utf-8-sig"))
+        d["gate"]["draft_free"] = value
+        _json.dump(d, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+
+    def write_chapter(self):
+        # 全 4 字短句 ×90：必然触发「句长节奏」风格发现（句均远低于任何下限）
+        body = "他走了。她笑了。\n\n" * 90
+        with open(os.path.join(self.tmp, "chapters", "ch-1.md"), "w", encoding="utf-8") as f:
+            f.write("# 第001章 测试\n\n" + body + "师父剑神。")
+
+    def test_draft_free_demotes_style_but_keeps_hard(self):
+        self.init_book()
+        self.write_chapter()
+        import json as _json
+        p = os.path.join(self.tmp, ".soloent", "book.json")
+        d = _json.load(open(p, encoding="utf-8-sig"))
+        d["checks"]["locked_details"] = [["测试锁定", ["师父"], ["剑神"], "测试硬口径拦截"]]
+        _json.dump(d, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+
+        self.set_flag(True)
+        out = run_cli("consistency_check.py", "--root", self.tmp).stdout
+        self.assertIn("严重 1", out, "硬口径（锁定细节）必须保持拦截：" + out[:300])
+        self.assertRegex(out, r"提示 [1-9]", "风格发现应降为提示：" + out[:300])
+        self.assertIn("[测试锁定]", out)
+
+        self.set_flag(False)
+        out2 = run_cli("consistency_check.py", "--root", self.tmp).stdout
+        self.assertRegex(out2, r"严重 [2-9]", "关掉开关必须回到旧行为（风格=严重）：" + out2[:300])
+
+    def test_brief_draft_free_hides_style_bans(self):
+        self.init_book()
+        self.set_flag(True)
+        out = run_cli("brief.py", "--root", self.tmp).stdout
+        self.assertIn("起草自由模式", out)
+        self.assertNotIn("黑名单词（", out, "起草上下文里不该出现风格禁令词表")
+        self.set_flag(False)
+        out2 = run_cli("brief.py", "--root", self.tmp).stdout
+        self.assertNotIn("起草自由模式", out2)
+
+    def test_draft_samples_alternate_profiles(self):
+        self.init_book()
+        result = run_cli("draft.py", "--root", self.tmp,
+                         "--name", "对比试写", "--samples", "2", "--json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        import json as _json
+        data = _json.loads(result.stdout)
+        self.assertEqual(len(data["drafts"]), 2)
+        bodies = [open(os.path.join(self.tmp, rel), encoding="utf-8").read()
+                  for rel in data["drafts"]]
+        self.assertIn("自由口径", bodies[0])
+        self.assertIn("红线口径（对照）", bodies[1])
+        self.assertIn("章级三限", bodies[1], "对照样本必须带完整禁令清单")
+        for b in bodies:
+            self.assertIn("NON-CANONICAL", b)
+
+
 class RuleResolutionTests(TempDirTest):
     """书作者自己写的规则必须真的生效，不能因为只查插件目录而变成死路径。
 
