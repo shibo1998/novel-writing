@@ -738,6 +738,75 @@ def boundary_issues(root, cfg=None):
 
 
 
+def rules_budget_issues(root, cfg=None, max_bytes=None):
+    """规则注入预算体检。返回 [(级别, 说明)]，级别 ∈ {"block", "warn"}。
+
+    为什么需要（2026-09-21 ch-33 复盘）：`inject_canon.collect_rules` 在预算耗尽时
+    会**按列表顺序跳过**后面的规则文件——实测高武 12 个文件只注入了 7 个，
+    被挤掉的恰是 `style-urban` 这类题材文风规则；仙侠更极端，只注入 3/11。
+    而这件事**此前没有任何一处会报警**：书照写，质量差，谁也看不出原因。
+
+    判据（与 inject_canon 同源，不另立一套）：
+      · 按 `rules.base_rules` 分层估算每层体积
+      · 底座层超份额 → block（底座缺失 = 写手在无风格约束状态下动笔）
+      · 题材层超预算 → warn（逐条点名，作者据此压缩）
+    """
+    rules = (cfg or {}).get("rules") or {}
+    load = [str(x) for x in (rules.get("load") or [])]
+    if not load:
+        return []
+    base_set = {str(x) for x in (rules.get("base_rules") or [])}
+    vault = (cfg or {}).get("vault") or ""
+    base_dir = os.path.join(vault, "rules") if vault else ""
+    if not base_dir or not os.path.isdir(base_dir):
+        return []   # 目录读不到的事由 inject_canon 报，别重复
+
+    if max_bytes is None:
+        # 与 hooks/inject_canon.py 同源；读不到就跳过（不硬编码一个会漂的数字）
+        try:
+            import importlib.util
+            hp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "hooks", "inject_canon.py")
+            spec = importlib.util.spec_from_file_location("_ic_budget", hp)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            max_bytes = mod.MAX_RULES_BYTES
+            share = getattr(mod, "BASE_RULES_SHARE", 0.7)
+        except Exception:
+            return []
+    else:
+        share = 0.7
+
+    def _size(rel):
+        # kit 资产优先，其次本书 .soloent/rules/（与 book.resolve_rule 同序）
+        for p in (os.path.join(base_dir, rel.replace("/", os.sep)),
+                  os.path.join(root, ".soloent", "rules", rel.replace("/", os.sep))):
+            if os.path.isfile(p):
+                try:
+                    with open(p, encoding="utf-8-sig") as f:
+                        return len(f.read().strip().encode("utf-8"))
+                except OSError:
+                    return 0
+        return 0
+
+    base_total = sum(_size(r) for r in load if r in base_set)
+    genre_total = sum(_size(r) for r in load if r not in base_set)
+    base_pool = int(max_bytes * share)
+    out = []
+    if base_total > base_pool:
+        out.append(("block",
+                    f"规则底座层体积 {base_total}B 超过份额 {base_pool}B——"
+                    f"会导致底座内某些文件被静默跳过，写手在缺规则状态下动笔。"
+                    f"请压缩（把定案复盘移到 notes/），或减少 base_rules 条目"))
+    if base_total + genre_total > max_bytes:
+        over = base_total + genre_total - max_bytes
+        out.append(("warn",
+                    f"规则总量 {base_total + genre_total}B 超注入上限 {max_bytes}B "
+                    f"（超 {over}B）——题材规则可能被跳过，跑 `python hooks/inject_canon.py` "
+                    f"看具体缺哪些；建议把各书 story-style 里的定案复盘移到 notes/"))
+    return out
+
+
 def sort_findings(findings):
     return sorted(findings, key=lambda x: (SEV_ORDER.get(x[0], 9), str(x[1]), x[2] if isinstance(x[2], int) else 0))
 

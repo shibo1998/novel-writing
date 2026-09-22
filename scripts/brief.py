@@ -183,8 +183,27 @@ def style_redlines(book, full=False):
     if not full and bool((book.sec("gate") or {}).get("draft_free")):
         out.append("起草自由模式（gate.draft_free）：动笔时**不看任何风格禁令**——"
                    "以角色的真实反应和语言的自然流动为主导；风格类项目完稿后由对账"
-                   "以「提示」报告，不拦闸门。完稿自查按 story-style「节奏软目标」表算"
-                   "（过闸线≠目标）。")
+                   "以「提示」报告，不拦闸门。**但「自由」是不被禁令绑手，不是没有目标**——"
+                   "节奏目标（下面那组数）动笔时就要朝它走。")
+        R = C.get("rhythm") or {}
+        if R:
+            tgt = R.get("_target") or {}
+            pick = lambda k: tgt.get(k, R.get(k))
+            seg = []
+            if pick("narr_avg_min") is not None:
+                seg.append(f"叙述句均长 ≥{pick('narr_avg_min')} 字")
+            if pick("narr_long_min_pct") is not None:
+                seg.append(f"长句(>25字) ≥{pick('narr_long_min_pct')}%")
+            if pick("short_ge10_max_pct") is not None:
+                seg.append(f"≤10字短句 ≤{pick('short_ge10_max_pct')}%")
+            if pick("turn_min_per_1000") is not None:
+                seg.append(f"转折词 ≥{pick('turn_min_per_1000')}/千字")
+            if seg:
+                src = "对标实测目标档" if tgt else "本书阈值"
+                out.append(f"★ 节奏目标（{src}，写作朝它走；**过闸线≠目标**，"
+                           f"照着闸门下限写就是「及格的碎」）：" + "、".join(seg)
+                           + "。长句三条路径：动作链不切断／因果挂上去／长句带细节短句砸落点"
+                             "（细则见 assets/rules/prose-directness.md §六）")
         for x in (C.get("locked_details") or []):
             hint = str(x[3])[:46]
             out.append(f"硬口径[{x[0]}]（违者拦，非风格项）：{hint}")

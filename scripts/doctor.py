@@ -312,6 +312,23 @@ def check_writing_readiness(rep, book, name):
         rep.warn(where, "句长节奏仍是「启动档」阈值（尚未按样板书校准）",
                  "硬门槛会拦错人也会放错人；拆书后按实测回调 story-style.md §3.1")
 
+    # 3b) 规则注入预算（2026-09-21 新增，判据在 kit.rules_budget_issues）
+    #
+    # 为什么必须体检这一项：规则文件超预算时，`collect_rules` 会**按列表顺序跳过**
+    # 后面的文件——实测高武 12 个只注入了 7 个、仙侠 11 个只注入了 3 个，
+    # 被挤掉的恰是**题材文风规则**。而这件事此前没有任何一处会报警：
+    # 书照写、闸门照过、质量差，谁也看不出原因（ch-33 事件的真正根因之一）。
+    for level, why in kit.rules_budget_issues(book.root, book.cfg):
+        if level == "block":
+            rep.warn(where, "规则注入超配（底座层）：%s" % why,
+                     "底座缺失 = 写手在无风格约束状态下动笔；"
+                     "把 story-style 里的定案复盘移到 notes/（参考仙侠的做法），"
+                     "或在 book.json 调小 base_rules")
+        else:
+            rep.warn(where, "规则注入超配：%s" % why,
+                     "跑 `python hooks/inject_canon.py` 看具体缺哪些文件；"
+                     "压缩规则正文（复盘移出）优于调大 MAX_RULES_BYTES")
+
     # 3) 注入体积：超了就会被 hook 截断，而截断只写在注入正文里（人看不见）
     canon = book.path("canon")
     if canon and os.path.isfile(canon):

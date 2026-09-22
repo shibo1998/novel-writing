@@ -1361,11 +1361,16 @@ class RuleInjectionBudgetTests(TempDirTest):
     规则静默消失。而最后一条往往是题材文风规则（最该注入的那条）。
     """
 
-    def _run(self, n_files, size_each, budget):
-        """造一个临时「vault/rules」并跑 collect_rules。"""
+    @staticmethod
+    def _ic():
+        """把 hooks/ 加进 sys.path 后取 inject_canon 模块（用例共用入口）。"""
         sys.path.insert(0, os.path.join(ROOT, "hooks"))
         import importlib
-        ic = importlib.import_module("inject_canon")
+        return importlib.import_module("inject_canon")
+
+    def _run(self, n_files, size_each, budget):
+        """造一个临时「vault/rules」并跑 collect_rules。"""
+        ic = self._ic()
         vault = os.path.join(self.tmp, "vault")
         rdir = os.path.join(vault, "rules")
         os.makedirs(rdir, exist_ok=True)
@@ -1393,17 +1398,87 @@ class RuleInjectionBudgetTests(TempDirTest):
         return ic.collect_rules(_B(), max_bytes=budget)
 
     def test_last_file_dropped_by_budget_is_reported(self):
-        """被挤掉的正好是最后一条时，也必须出现在警告里（不能静默消失）。"""
+        """被挤掉的正好是最后一条时，也必须出现在警告里（不能静默消失）。
+
+        断言的是**意图**（被挤掉的条目被点名 + 有警示），不是某一句文案——
+        2026-09-21 分层配额改造换了措辞（「未能注入」→「不足被跳过」），
+        绑死文案的用例会误报失败，而它想守的规则其实仍然成立。
+        """
         txt, names = self._run(n_files=3, size_each=2000, budget=3000)
         self.assertTrue(len(names) < 3, "预算本应不够装下 3 条")
-        self.assertIn("未能注入", txt, "超预算却没有任何提示 = 规则静默消失")
+        self.assertIn("⚠️", txt, "超预算却没有任何提示 = 规则静默消失")
         self.assertIn("r2.md", txt, "被挤掉的最后一条必须点名")
 
     def test_within_budget_reports_nothing(self):
         """反向边界：装得下时不该报警告，且全部注入。"""
         txt, names = self._run(n_files=3, size_each=100, budget=20000)
         self.assertEqual(len(names), 3)
-        self.assertNotIn("未能注入", txt)
+        self.assertNotIn("⚠️", txt)
+
+    def test_base_layer_has_its_own_budget(self):
+        """分层配额：底座层（base_rules）与题材层各花各的，互不挤占。
+
+        为什么单独立用例：2026-09-21 实测——仙侠 story-style 18.5KB 一个人吃掉
+        半个预算，把 style-xianxia 与 anti-ai-character-realism 双双挤出注入。
+        分层后底座层吃自己的份额，题材层用剩下的。这条规则必须有回归保护，
+        否则日后有人「简化」回单池分配，题材规则又会被静默挤掉。
+        """
+        import tempfile
+        ic = self._ic()
+        with tempfile.TemporaryDirectory() as vault:
+            rdir = os.path.join(vault, "rules")
+            os.makedirs(rdir, exist_ok=True)
+            # 底座 1 条（约 4.8KB）＋ 题材 1 条（约 0.9KB），总预算够两边都装
+            for name, size in (("base.md", 1600), ("genre.md", 300)):
+                with open(os.path.join(rdir, name), "w", encoding="utf-8") as f:
+                    f.write("规" * size)
+            load = ["base.md", "genre.md"]
+
+            class _B:
+                cfg = {"rules": {"load": load, "base_rules": ["base.md"]}}
+
+                def sec(self, _k):
+                    return {"load": load}
+
+                def resolve_rule(self, rel):
+                    return (os.path.join(vault, "rules", rel), "kit")
+
+            _B.vault = vault
+            _, names = ic.collect_rules(_B(), max_bytes=12000)
+            self.assertIn("base.md", names, "底座规则必须进")
+            self.assertIn("genre.md", names,
+                          "题材规则必须能进（分层就是为它保住预算）")
+
+    def test_oversized_base_does_not_silently_kill_genre(self):
+        """反向边界：底座超大时，题材层仍保有自己的份额（这才是分层的意义）。
+
+        单池分配下，底座文件够大就会把题材规则全挤掉——仙侠实测就是这样。
+        """
+        import tempfile
+        ic = self._ic()
+        with tempfile.TemporaryDirectory() as vault:
+            rdir = os.path.join(vault, "rules")
+            os.makedirs(rdir, exist_ok=True)
+            for name, size in (("base.md", 5000), ("genre.md", 300)):
+                with open(os.path.join(rdir, name), "w", encoding="utf-8") as f:
+                    f.write("规" * size)
+            load = ["base.md", "genre.md"]
+
+            class _B:
+                cfg = {"rules": {"load": load, "base_rules": ["base.md"]}}
+
+                def sec(self, _k):
+                    return {"load": load}
+
+                def resolve_rule(self, rel):
+                    return (os.path.join(vault, "rules", rel), "kit")
+
+            _B.vault = vault
+            # 总预算 12000，底座占 15000+（装不下）→ 底座层自己爆，
+            # 但不该把题材层的 genre.md 一起带走
+            _, names = ic.collect_rules(_B(), max_bytes=12000)
+            self.assertIn("genre.md", names,
+                          "底座撑爆自己的份额时，题材规则仍须进得去")
 
 
 class InstallAndLibraryScanTests(TempDirTest):

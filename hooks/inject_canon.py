@@ -24,11 +24,27 @@ import kit  # noqa: E402
 
 MAX_CANON_BYTES = 24000   # 防止正典表膨胀到吃掉半个上下文
 MAX_DISCIPLINE = 16       # 纪律条目上限（默认 9 条 + 本书 extra_discipline 的余量）
-MAX_RULES_BYTES = 26000   # 规则正文注入上限。
-# 实测：rules.load 满配 10 个文件合计约 21KB（本书还可能有自写规则），
-# 卡在 20KB 会把最后一条**题材文风规则**砍掉——那恰恰是最该注入的一条。
-# 真超了也要**报警**，不能静默截断（见 collect_rules）。
+MAX_RULES_BYTES = 40000   # 规则正文注入上限。
+# 实测演进：
+#   · 2026-09-20 满配 10 个文件约 22.5KB，卡在 20KB 会把**题材文风规则**砍掉，
+#     那恰恰是最该注入的一条，于是定 26KB。
+#   · 2026-09-21 复盘发现 26KB 仍然不够：把 `story-style.md`（每本书风格第一手文件，
+#     高武 6.4KB／仙侠 16KB）补进 `rules.load` 后，高武 12 个文件在第 7 个处耗尽——
+#     **被挤掉的正是 style-urban 这类题材规则**；仙侠更极端，只注入了 3/11。
+#   · 同日再调：底座实测最大 30.4KB（仙侠），定 40KB 让「底座 + 题材」都能装下。
+#   同时 collect_rules 改为**分层配额 + 逐条报告**，不再按列表顺序静默砍尾部。
+# ⚠️ 调大上限是权衡：注入越多，写手的可支配上下文越少。若某本书超限，
+#    正确做法是**压缩规则文件**（把复盘/定案记录移出规则文件，见
+#    `notes/story-style-定案记录.md` 的做法），不是无脑调大这个数。
 MAX_SOLOENT_STATUS_BYTES = 4000   # SOLOENT.md §7/§8 的注入上限（doctor 也用这个数体检）
+
+# 底座层拿总预算的多大比例（2026-09-21）。
+# 底座 = `rules.base_rules` 声明的文件（story-style / 通用反 AI 味 / 直白纪律）。
+# 实测仙侠的 story-style 单独就有 16KB，若与题材层共用一个池子，
+# 它会按顺序挤掉 style-xianxia——所以给底座一个固定份额，剩下的留给题材层。
+# 0.78 ≈ 40KB 里给底座 31.2KB（实测最大 30.4KB，装得下）、题材层 8.8KB（实测 10.6KB 略紧，
+# 超出的部分会被逐条报告，作者据此压缩——**报告比静默丢失强**）。
+BASE_RULES_SHARE = 0.78
 
 
 def find_book_candidates(start):
@@ -104,6 +120,69 @@ def locate_book(explicit_root, lib):
     return None, "", []
 
 
+def _read_rule(book, rel):
+    """读一条规则。返回 (正文, 错误说明)。正文为空串表示失败。"""
+    hit = book.resolve_rule(rel)
+    if not hit:
+        return "", "找不到文件"
+    try:
+        with open(hit[0], encoding="utf-8-sig") as f:
+            text = f.read().strip()
+    except OSError as e:
+        return "", f"读不出来（{e.__class__.__name__}）"
+    if not text:
+        return "", "空文件"
+    return text, ""
+
+
+# 注入时剥离「给作者看的定案记录」——2026-09-21 新增。
+#
+# 为什么：各书 `story-style.md` 是按「定案档案」写的——既有**写作指令**（写手必须看到），
+# 也有**复盘**（"我一开始搞错了…""为什么补这一条…"、参照数据、"错在哪"）。
+# 后者是给作者看的办案记录，写手读了没用，却吃掉大量注入预算。
+# 实测：仙侠 story-style 18.5KB 里约 6KB 是这类内容，它一个人吃掉一半预算，
+# 把 `ai-anti-patterns`、`prose-directness` 全挤了出去。
+#
+# 剥离规则（只删「明确以复盘口吻开头」的块，不碰写作指令）：
+#   · 引用块里以「为什么/我一开始/我拿/错在哪/实测/参照/我搞错」等开头的段落
+#   · `> **为什么…**` / `> **我…**` 形式的整块
+# 安全原则：**剥多了会丢掉写作指令，剥少了只是浪费预算**——所以只删高置信度的，
+# 拿不准的一律保留。剥离后若某节变成空壳，整节保留（宁多勿少）。
+_INJECT_STRIP_RE = re.compile(
+    r"^>\s*\*\*(?:为什么|我|错在哪|实测|参照|背景|起因|定案)", re.M)
+
+# 明确的「整块复盘」起始标记：出现即从此处删到该引用块结束
+_BLOCK_STRIP_HEADS = (
+    "> **为什么补", "> **为什么单列", "> **为什么要", "> **我一开始",
+    "> **错在哪", "> **我拿",
+)
+
+
+def strip_review_noise(text):
+    """剥离规则文件里「给作者看的复盘」，只留写作指令。
+
+    返回 (瘦身后正文, 省下的字节数)。省下 0 表示没有可剥的内容。
+    """
+    lines = text.splitlines()
+    keep, i = [], 0
+    while i < len(lines):
+        ln = lines[i]
+        if any(ln.startswith(h) for h in _BLOCK_STRIP_HEADS) or _INJECT_STRIP_RE.match(ln):
+            # 跳过这一整个引用块（连续的 > 行 + 紧邻的空行）
+            while i < len(lines) and (lines[i].lstrip().startswith(">") or not lines[i].strip()):
+                i += 1
+            continue
+        keep.append(ln)
+        i += 1
+    out = "\n".join(keep)
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    # 安全阀：剥掉超过一半说明规则误判，宁可原样返回
+    if len(out.encode("utf-8")) < len(text.encode("utf-8")) * 0.5:
+        return text, 0
+    saved = len(text.encode("utf-8")) - len(out.encode("utf-8"))
+    return out, saved
+
+
 def collect_rules(book, max_bytes=MAX_RULES_BYTES):
     """把 book.json `rules.load` 声明的规则文件**正文**拼起来。
 
@@ -115,60 +194,170 @@ def collect_rules(book, max_bytes=MAX_RULES_BYTES):
     所以这里补上：`rules.load` 声明谁，就注入谁（`rules.forbid` 天然不在列内）。
     单一来源不变——内容仍只在规则文件里，改规则不用改代码。
 
-    返回 (正文, 已注入文件名列表)。**文件缺失/读不出来时在正文里显式列出**——
-    静默少注入一条规则，等于防线悄悄缺一块，而这正是本 hook 存在的理由（见文件头）。
+    ## 分层配额（2026-09-21 新增，修一个真实缺陷）
+
+    实测：高武 `rules.load` 满配 12 个文件，其中**前 4 个**（story-style 6.4KB、
+    consistency-gate 2.6KB、ai-anti-patterns 3.9KB、prose-directness 3.6KB）就吃掉
+    16.5KB，26KB 预算在**第 7 个文件**处耗尽——被挤掉的恰恰是 `style-urban.md`
+    这种**题材文风规则**，也就是最该进上下文的那些。仙侠更极端：只注入了 3/11。
+
+    根因：`rules.load` 的顺序是「作者填写顺序」，不是「重要性顺序」，
+    而旧的超限处理是**按列表顺序砍尾部 + 只发一句警告**——等于防线悄悄缺一块。
+
+    现口径：**通用底座必进（保底配额），题材/专属规则吃剩余预算，超限逐条报告。**
+    保底不是靠顺序，是靠显式分层——`base_rules` 声明的文件优先分配。
+
+    返回 (正文, 已注入文件名列表)。
     """
-    load = [str(x) for x in ((book.cfg.get("rules") or {}).get("load") or [])]
-    vault = book.vault or ""
-    base = os.path.join(vault, "rules") if vault else ""
+    R = book.cfg.get("rules") or {}
+    load = [str(x) for x in (R.get("load") or [])]
     if not load:
         return "", []
-    if not base or not os.path.isdir(base):
+    base_set = {str(x) for x in (R.get("base_rules") or [])}
+    vault = book.vault or ""
+    base_dir = os.path.join(vault, "rules") if vault else ""
+    if not base_dir or not os.path.isdir(base_dir):
         return ("\n\n> ⚠️ **规则目录读不到**：`book.json` 声明要加载 "
-                + "、".join(load) + f"，但目录不存在（`{base}`）。"
+                + "、".join(load) + f"，但目录不存在（`{base_dir}`）。"
                 "本次未注入任何规则——请检查 `vault` 配置与插件安装完整性。\n"), []
-    out, kept, missing, used = [], [], [], 0
-    for rel in load:
-        # kit 资产优先，kit 里没有就用本书 `.soloent/rules/` 的自写副本
-        # （书作者自己写的规则以前会被当成缺失文件跳过 —— 规则写了却没生效）
-        hit = book.resolve_rule(rel)
-        if not hit:
-            missing.append(rel)
-            continue
-        path = hit[0]
-        try:
-            with open(path, encoding="utf-8-sig") as f:
-                text = f.read().strip()
-        except OSError:
-            missing.append(rel)
-            continue
-        if not text:
-            missing.append(rel + "（空文件）")
+
+    # 排单：声明的顺序就是注入顺序（作者可用它控制优先级）；
+    # 未在 base_rules 里声明的，默认全部当「通用底座」——
+    # 向后兼容：没写 base_rules 的书，行为与旧版一致（按声明顺序全量尝试）。
+    if base_set:
+        ordered = [x for x in load if x in base_set] + [x for x in load if x not in base_set]
+    else:
+        ordered = list(load)
+
+    # ---- 分层配额（2026-09-21）----
+    # 两段预算：底座层与题材层**各花各的**，互不挤占。
+    #
+    # 为什么必须分开算：底座里装着 story-style（每本书风格第一手文件，实测高武 6.4KB、
+    # 仙侠 18.5KB）、节奏目标、通用反 AI 味——缺一条，写手就在没有风格约束的状态下动笔。
+    # 而题材层（style-urban / style-xianxia / style-system）决定「像不像这类书」。
+    # 用一个大池子按顺序分配时，仙侠的 story-style 一个人就吃掉一半，
+    # 结果 style-xianxia 与 anti-ai-character-realism 双双被砍（实测 6/11）。
+    # 分开算之后：底座层保底吃满自己的份额，题材层用剩下的，互不伤害。
+    if base_set:
+        base_pool = int(max_bytes * BASE_RULES_SHARE)
+    else:
+        base_pool = max_bytes
+    pools = {"base": [base_pool, 0], "genre": [max_bytes, 0]}   # [上限, 已用]
+
+    def _pool_of(rel):
+        return "base" if (base_set and rel in base_set) else "genre"
+
+    out, kept = [], []
+    missing, dropped = [], []
+    for rel in ordered:
+        text, err = _read_rule(book, rel)
+        if err:
+            missing.append(f"{rel}（{err}）")
             continue
         blob = f"\n\n---\n\n### 规则文件：{rel}\n\n{text}"
         cost = len(blob.encode("utf-8"))
-        if used + cost > max_bytes:
-            # 超预算：把剩下的收口成一句提示，而不是静默截断一半规矩
-            left = max_bytes - used - 200
-            if left > 400:
-                out.append(blob.encode("utf-8")[:left].decode("utf-8", "ignore")
-                           + "\n\n…（已达注入上限，本文件其余内容请自行打开阅读）")
-                kept.append(rel)
-            # ⚠️ 原来只把「后面还没处理的」列进提示，**当前这条自己被漏掉**——
-            # 于是被挤掉的若是最后一条，就没有任何警告，规则静默消失。
-            # 这正是本 hook 文件头明令禁止的情形（2026-09-20 实测命中）。
-            rest = [rel] if rel not in kept else []
-            rest += [x for x in load[load.index(rel) + 1:] if x not in kept]
-            if rest:
-                missing.append("未注入（超上限）：" + "、".join(rest))
-            break
+        key = _pool_of(rel)
+        cap = pools[key][0] if key == "base" else min(pools["genre"][0], max_bytes)
+        # 底座层用自己的份额；题材层可以用「总上限 － 底座已用」的剩余
+        if key == "genre":
+            cap = max_bytes - pools["base"][1]
+            cap = min(cap, pools["genre"][0])
+        if pools[key][1] + cost > cap:
+            dropped.append((key, rel))
+            continue
         out.append(blob)
         kept.append(rel)
-        used += cost
+        pools[key][1] += cost
+
+    base_dropped = [r for k, r in dropped if k == "base"]
+    genre_dropped = [r for k, r in dropped if k == "genre"]
+    warn = []
     if missing:
-        out.append("\n\n> ⚠️ **以下规则文件未能注入**，动笔前请自行打开："
-                   + "、".join(missing))
-    return "".join(out), kept
+        warn.append("\n\n> ⚠️ **以下规则文件未能注入**，动笔前请自行打开："
+                    + "、".join(missing))
+    if base_dropped:
+        warn.append("\n\n> ⚠️ **底座规则文件因注入预算（底座层 %d B）不足被跳过**：%s\n"
+                    "> 底座缺失 = 写手在无风格约束状态下动笔，**属配置错误，请立即处理**："
+                    "压缩该文件正文，或减少 `rules.load` 的底座条目。"
+                    % (base_pool, "、".join(base_dropped)))
+    if genre_dropped:
+        # 逐条列出被挤掉的，而不是只报一句「已达上限」——
+        # 被挤掉的每一条都要能被看见，否则等于静默缺防线。
+        warn.append("\n\n> ⚠️ **以下题材/补充规则因注入预算（%d B，底座已占 %d B）不足被跳过**，"
+                    "动笔前请自行打开：%s\n> 处理建议：压缩该文件，或删掉本书用不上的条目，"
+                    "或减少 `rules.load` 条目——**不要让题材文风规则长期缺席。**"
+                    % (max_bytes, pools["base"][1], "、".join(genre_dropped)))
+    return "".join(out) + "".join(warn), kept
+
+
+def rhythm_target_block(book):
+    """把「节奏目标」注入到写手上下文（2026-09-21 新增）。
+
+    为什么必须单独注入：实测发现写手上下文里 `平均句长`/`均长`/`40%`/`3.5`
+    **出现 0 次** —— 目标档只写在本书 `.soloent/rules/story-style.md`，
+    而那个文件不在 `rules.load` 里，**从未进过注入**。写手只拿到 36 条负向禁令，
+    没有可操作的正向目标，于是照着闸门下限写 = 「及格的碎」（ch-33 实测：
+    句均 21.27 / 长句 32.0% / 转折 2.55，三项全低于 ch-01）。
+
+    数值来源与闸门同源：优先 `checks.rhythm._target`（对标实测档），
+    没有就用过渡档阈值本身。**不硬编码数字**，改 book.json 即改注入。
+    返回注入正文；本书没配 rhythm 时返回空串。
+    """
+    R = book.sec("checks").get("rhythm") or {}
+    if not R:
+        return ""
+
+    def pick(key, default=None):
+        tgt = R.get("_target") or {}
+        for v in (tgt.get(key), R.get(key), default):
+            if v is not None:
+                return v
+        return None
+
+    avg = pick("narr_avg_min")
+    lng = pick("narr_long_min_pct")
+    sht = pick("short_ge10_max_pct")
+    twn = pick("turn_min_per_1000")
+    dial = pick("dialogue_max_pct")
+    if avg is None and lng is None:
+        return ""
+    is_target = bool(R.get("_target"))
+
+    rows = []
+    if avg is not None:
+        rows.append(f"叙述句均长 ≥ {avg} 字（低于它说明句子碎、密度不足）")
+    if lng is not None:
+        rows.append(f"长句(>25字)占比 ≥ {lng}%（没有长句 = 没有铺陈 = 读者读不到重量）")
+    if sht is not None:
+        rows.append(f"≤10 字短句占比 ≤ {sht}%（短句是重锤，连着敲就是清单）")
+    if twn is not None:
+        rows.append(f"转折/关联词密度 ≥ {twn} 个/千字（句与句之间的关节）")
+    if dial is not None:
+        rows.append(f"对话占比 ≤ {dial}%")
+
+    src = ("对标实测目标档 `checks.rhythm._target`" if is_target
+           else "本书 `checks.rhythm` 阈值（尚未填 `_target` 目标档）")
+    lines = [
+        "\n\n---\n\n# 【自动注入 · 节奏目标（写作方向，不是闸门下限）】\n",
+        f"> 来源：`{os.path.join(book.root, kit.CONFIG_REL)}` 的 {src} —— 与闸门同源，改配置即改此处。\n",
+        "> **过闸线 ≠ 目标**：硬闸门只拦最差的下限，照着下限写就是「及格的碎」。",
+        "> 写作一律朝下面这组数走；完稿自查也按这组算，不按闸门算。\n",
+    ]
+    lines += [f"- {r}" for r in rows]
+    lines.append(
+        "\n**长句怎么写出来**（禁令给不了这个，必须正向给）：\n"
+        "1. **动作链不切断**：一个连续动作用「，」串起来，最后落一个结果。"
+        "❌「他把碗放下。他站起来。他走到门口。」→ ✅「他把碗往桌上一推站起来，"
+        "绕过两张凳子走到门口，一把拉开了那扇被油烟熏得发黏的木门。」\n"
+        "2. **因果/让步挂上去**：❌「他不想问。他还是问了。」→ ✅「他本来不想问，"
+        "可那句话在舌尖上转了两圈，到底还是溜了出来。」\n"
+        "3. **长句带细节，短句砸落点**：一段的标准配比是「长—长—短」，"
+        "前面铺够，最后一句用短句收，力道才出得来。\n"
+        "\n**落笔前三问**：① 这段主句是不是又短又平？② 这段有没有一个长句扛住信息？"
+        "③ 该有转折词的地方有没有？（细则见 `assets/rules/prose-directness.md` §六）\n"
+        "\n> ⚠️ 倒过来同样成立：**长 ≠ 好**。长句是承载信息的，不是把句子灌水拉长；"
+        "该短的地方就要短。目标是「长短错落」，不是「全都变长」。")
+    return "\n".join(lines)
 
 
 def default_discipline(kit_dir):
@@ -300,6 +489,15 @@ def main():
                     f"AGENTS.md §2 只列路径，光靠自觉打开是不够的（2026-09-20 复盘结论）。\n"
                     f"> **起草时逐条遵守；写完的自查以这些规则为判据。**\n"
                     + rules_text)
+            # ⑤ 节奏目标（2026-09-21 新增）
+            #
+            # 为什么要单独一节：实测写手上下文里「平均句长/均长/40%/3.5」出现 0 次——
+            # 目标档只躺在 story-style.md（不在 rules.load 内），从未进过注入。
+            # 于是写手只看到 36 条负向禁令，没有正向目标，照着闸门下限写 = 及格的碎。
+            # 本节的数字**从 book.json 现取**，与闸门同源，不硬编码。
+            rt = rhythm_target_block(book)
+            if rt:
+                parts.append(rt)
         else:
             parts.append("# 【自动注入 · 作品库环境】\n\n"
                          "检测到书目录，但 `.soloent/book.json` 读不出来——请先修复配置。\n")
